@@ -1,0 +1,4 @@
+*.csv
+accountManagerEnv/
+saveCompte/
+__pycache__/
