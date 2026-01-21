@@ -75,6 +75,57 @@ def format_price(price: str) -> str:
     return f"{val:.2f}"
 
 
+def load_budgets(budgets_path: Path) -> dict[str, dict[str, dict[str, float]]]:
+    """Charge les budgets.
+
+    Format JSON:
+    {
+      "2026": {"01": {"Nourriture": 200.0, ...}, "02": {...}},
+      "2025": {...}
+    }
+    """
+
+    budgets_path = Path(budgets_path)
+    if not budgets_path.exists():
+        return {}
+
+    try:
+        data = json.loads(budgets_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    result: dict[str, dict[str, dict[str, float]]] = {}
+    for year, months in data.items():
+        if not isinstance(year, str) or not isinstance(months, dict):
+            continue
+        out_months: dict[str, dict[str, float]] = {}
+        for month, cats in months.items():
+            if not isinstance(month, str) or not isinstance(cats, dict):
+                continue
+            out_cats: dict[str, float] = {}
+            for cat, value in cats.items():
+                if not isinstance(cat, str):
+                    continue
+                try:
+                    out_cats[cat] = float(value)
+                except Exception:
+                    out_cats[cat] = 0.0
+            out_months[month] = out_cats
+        result[year] = out_months
+    return result
+
+
+def save_budgets(budgets_path: Path, budgets: dict[str, dict[str, dict[str, float]]]) -> None:
+    budgets_path = Path(budgets_path)
+    budgets_path.parent.mkdir(parents=True, exist_ok=True)
+    budgets_path.write_text(
+        json.dumps(budgets, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 DEFAULT_CATEGORIES = [
     "Nourriture",
     "Vie quotidienne",

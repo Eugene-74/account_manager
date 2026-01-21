@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 import logic
+from budget_dialog import BudgetDialog
 
 
 @dataclass(frozen=True)
@@ -380,10 +381,12 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		super().__init__()
 		self._csv_path = csv_path
 		self._options_path = Path(__file__).resolve().parent / "saveCompte" / "qt_options.json"
+		self._budgets_path = Path(__file__).resolve().parent / "saveCompte" / "budgets.json"
 		self._categories, self._category_colors = logic.load_category_options(
 			self._options_path
 		)
 		self._categories = sorted(self._categories, key=str.casefold)
+		self._budgets = logic.load_budgets(self._budgets_path)
 
 		self.setWindowTitle("Dépenses")
 		self.resize(1000, 650)
@@ -433,6 +436,10 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.manage_categories_button.clicked.connect(self._on_manage_categories_clicked)
 		header_layout.addWidget(self.manage_categories_button)
 
+		self.budget_button = QtWidgets.QPushButton("Budget")
+		self.budget_button.clicked.connect(self._on_budget_clicked)
+		header_layout.addWidget(self.budget_button)
+
 		self.reload_button = QtWidgets.QPushButton("Recharger")
 		self.reload_button.clicked.connect(self.reload)
 		header_layout.addWidget(self.reload_button)
@@ -458,6 +465,40 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.table.verticalHeader().setVisible(False)
 		root_layout.addWidget(self.table, stretch=1)
 
+		self.summary_layout = QtWidgets.QHBoxLayout()
+		self.summary_layout.setSpacing(10)
+		root_layout.addLayout(self.summary_layout)
+
+		self.pivot_group = QtWidgets.QGroupBox("Totaux par mois / catégorie")
+		pivot_layout = QtWidgets.QVBoxLayout(self.pivot_group)
+		pivot_layout.setContentsMargins(8, 8, 8, 8)
+		pivot_layout.setSpacing(6)
+
+		# Tableau pivot: 12 lignes (mois) + 2 lignes synthèse, colonnes dynamiques = catégories + Total
+		self.pivot_table = QtWidgets.QTableWidget(14, 2)
+		self.pivot_table.setHorizontalHeaderLabels(["Mois", "Total"])
+		self.pivot_table.horizontalHeader().setStretchLastSection(True)
+		self.pivot_table.verticalHeader().setVisible(False)
+		self.pivot_table.setEditTriggers(
+			QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+		)
+		self.pivot_table.setSelectionMode(
+			QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+		)
+		self.pivot_table.setAlternatingRowColors(True)
+		self.pivot_table.setMinimumHeight(280)
+
+		for i in range(12):
+			month_item = QtWidgets.QTableWidgetItem(f"{i + 1:02d}")
+			self.pivot_table.setItem(i, 0, month_item)
+		# 2 lignes de synthèse
+		self.pivot_table.setItem(12, 0, QtWidgets.QTableWidgetItem("Total à date"))
+		self.pivot_table.setItem(13, 0, QtWidgets.QTableWidgetItem("Projection fin d'année"))
+
+		pivot_layout.addWidget(self.pivot_table)
+
+		self.summary_layout.addWidget(self.pivot_group, stretch=1)
+
 		self.status = QtWidgets.QStatusBar()
 		self.setStatusBar(self.status)
 
@@ -472,12 +513,60 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.table.doubleClicked.connect(self._on_table_double_clicked)
 		self.table.setColumnHidden(0, True)
 
+		self._expenses_cache: list[Expense] = []
+
 		# Valeurs par défaut: année + mois actuels
 		current = QtCore.QDate.currentDate()
 		self._default_year = current.year()
 		self._default_month = current.month()
+		self._month_names = [
+			"Janvier",
+			"Février",
+			"Mars",
+			"Avril",
+			"Mai",
+			"Juin",
+			"Juillet",
+			"Août",
+			"Septembre",
+			"Octobre",
+			"Novembre",
+			"Décembre",
+		]
 
 		self.reload()
+
+	def _selected_year_or_current(self) -> int:
+		year_text = self.year_combo.currentText().strip() if self.year_combo.count() else "Tous"
+		if year_text and year_text != "Tous":
+			try:
+				return int(year_text)
+			except ValueError:
+				pass
+		return QtCore.QDate.currentDate().year()
+
+	def _on_budget_clicked(self) -> None:
+		year = self._selected_year_or_current()
+		year_key = str(year)
+		initial = self._budgets.get(year_key, {})
+
+		dlg = BudgetDialog(
+			year=year,
+			categories=self._categories,
+			month_names=self._month_names,
+			initial_budgets=initial,
+			parent=self,
+		)
+		if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+			return
+
+		try:
+			self._budgets[year_key] = dlg.budgets()
+			logic.save_budgets(self._budgets_path, self._budgets)
+		except ValueError as exc:
+			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			return
+		self._update_pivot_totals()
 
 	def _on_add_clicked(self) -> None:
 		if not self._categories:
@@ -629,6 +718,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self.month_combo.setEnabled(False)
 			self._proxy.setYearMonthFilter(None, None)
 			self._update_status()
+			self._update_pivot_totals()
 			return
 
 		self.month_combo.setEnabled(True)
@@ -637,6 +727,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		except ValueError:
 			self._proxy.setYearMonthFilter(None, None)
 			self._update_status()
+			self._update_pivot_totals()
 			return
 
 		month_text = self.month_combo.currentText().strip()
@@ -651,6 +742,293 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		self._proxy.setYearMonthFilter(year, month)
 		self._update_status()
+		self._update_pivot_totals()
+
+	def _update_pivot_totals(self) -> None:
+		"""Met à jour un tableau pivot: 1 ligne/mois, colonnes = catégories + Total."""
+
+		year_text = (
+			self.year_combo.currentText().strip() if self.year_combo.count() else "Tous"
+		)
+		year: int | None
+		if year_text == "Tous" or year_text == "":
+			year = None
+		else:
+			try:
+				year = int(year_text)
+			except ValueError:
+				year = None
+
+		# Colonnes = toutes les catégories connues + celles présentes dans les dépenses
+		category_set: set[str] = set(self._categories)
+		for exp in self._expenses_cache:
+			cat = (exp.category or "").strip()
+			if cat:
+				category_set.add(cat)
+			else:
+				category_set.add("(Sans catégorie)")
+		categories = sorted(category_set, key=str.casefold)
+		year_key = str(year) if year is not None else ""
+		budgets_for_year: dict[str, dict[str, float]] = (
+			self._budgets.get(year_key, {}) if year_key else {}
+		)
+
+		headers = ["Mois", *categories, "Total"]
+		self.pivot_table.setColumnCount(len(headers))
+		self.pivot_table.setHorizontalHeaderLabels(headers)
+		self.pivot_table.horizontalHeader().setStretchLastSection(True)
+		self.pivot_table.setRowCount(14)
+
+		# cumuls[month_index][category] = total
+		cumuls: list[dict[str, float]] = [dict() for _ in range(12)]
+		for exp in self._expenses_cache:
+			date = QtCore.QDate.fromString(exp.date, "dd/MM/yyyy")
+			if not date.isValid():
+				continue
+			if year is not None and date.year() != year:
+				continue
+			try:
+				value = float(logic.parse_price_to_float(exp.price))
+			except Exception:
+				continue
+			m = date.month() - 1
+			if not (0 <= m < 12):
+				continue
+			cat = (exp.category or "").strip()
+			if not cat:
+				cat = "(Sans catégorie)"
+			cumuls[m][cat] = cumuls[m].get(cat, 0.0) + value
+
+		annual_total = 0.0
+		monthly_totals: list[float] = [0.0] * 12
+		for m in range(12):
+			month_item = self.pivot_table.item(m, 0)
+			if month_item is None:
+				month_item = QtWidgets.QTableWidgetItem(self._month_names[m])
+				self.pivot_table.setItem(m, 0, month_item)
+			else:
+				month_item.setText(self._month_names[m])
+
+			row_total = 0.0
+			month_budget_total = 0.0
+			month_expenses_on_budget_total = 0.0
+			month_has_any_budget = False
+			for ci, cat in enumerate(categories, start=1):
+				val = cumuls[m].get(cat, 0.0)
+				row_total += val
+				cell = self.pivot_table.item(m, ci)
+				if cell is None:
+					cell = QtWidgets.QTableWidgetItem()
+					self.pivot_table.setItem(m, ci, cell)
+				cell.setText(f"{val:.2f}")
+
+				# Budget / reste (tooltip + surbrillance si dépassement)
+				budget = 0.0
+				budget_set = False
+				if year is not None:
+					month_key = f"{m + 1:02d}"
+					month_budgets = budgets_for_year.get(month_key)
+					if isinstance(month_budgets, dict) and cat in month_budgets:
+						budget = float(month_budgets.get(cat) or 0.0)
+						budget_set = True
+				if budget_set:
+					month_has_any_budget = True
+					month_budget_total += budget
+					month_expenses_on_budget_total += float(val)
+					remaining = budget - float(val)
+					# Afficher le reste (budget - dépenses)
+					cell.setText(f"{remaining:.2f}")
+					cell.setToolTip(
+						f"Budget: {budget:.2f}\nDépenses: {float(val):.2f}\nReste: {remaining:.2f}"
+					)
+					cell.setBackground(QtGui.QBrush())
+					if remaining < 0:
+						cell.setForeground(QtGui.QBrush(QtGui.QColor("#b92020")))
+					elif remaining > 0:
+						cell.setForeground(QtGui.QBrush(QtGui.QColor("#008000")))
+					else:
+						cell.setForeground(QtGui.QBrush())
+				else:
+					cell.setToolTip("")
+					cell.setBackground(QtGui.QBrush())
+					cell.setForeground(QtGui.QBrush())
+
+			total_col = len(headers) - 1
+			total_item = self.pivot_table.item(m, total_col)
+			if total_item is None:
+				total_item = QtWidgets.QTableWidgetItem()
+				self.pivot_table.setItem(m, total_col, total_item)
+
+			# Si au moins un budget existe ce mois, le Total devient "reste total" sur les catégories budgétées.
+			if month_has_any_budget:
+				remaining_total = month_budget_total - month_expenses_on_budget_total
+				total_item.setText(f"{remaining_total:.2f}")
+				total_item.setToolTip(
+					f"Budget total: {month_budget_total:.2f}\nDépenses: {month_expenses_on_budget_total:.2f}\nReste: {remaining_total:.2f}"
+				)
+				# Couleur standard pour le reste: vert si positif, rouge si négatif
+				if remaining_total < 0:
+					total_item.setForeground(QtGui.QBrush(QtGui.QColor("#b92020")))
+				elif remaining_total > 0:
+					total_item.setForeground(QtGui.QBrush(QtGui.QColor("#008000")))
+				else:
+					total_item.setForeground(QtGui.QBrush())
+			else:
+				total_item.setToolTip("")
+				total_item.setText(f"{row_total:.2f}")
+				# Couleur "dépenses": rouge si >0, vert si <0
+				if row_total > 0:
+					total_item.setForeground(QtGui.QBrush(QtGui.QColor("#b92020")))
+				elif row_total < 0:
+					total_item.setForeground(QtGui.QBrush(QtGui.QColor("#008000")))
+				else:
+					total_item.setForeground(QtGui.QBrush())
+
+			annual_total += row_total
+			monthly_totals[m] = row_total
+
+		label_year = year_text if year is not None else "Tous"
+		self.pivot_group.setTitle(f"Totaux par mois / catégorie ({label_year})")
+
+		# Lignes synthèse
+		current = QtCore.QDate.currentDate()
+		is_current_year = year is not None and year == current.year()
+		months_elapsed = current.month() if is_current_year else 12
+		if months_elapsed < 1:
+			months_elapsed = 1
+
+		total_to_date = sum(monthly_totals[:months_elapsed])
+		# Deuxième ligne: total sur l'année complète (Janvier → Décembre)
+		projection_year_end = annual_total
+
+		# Labels
+		row_to_date = 12
+		row_proj = 13
+		label_to_date = "Total à date"
+		if is_current_year:
+			label_to_date = f"Total à date (jusqu'à {self._month_names[months_elapsed - 1]})"
+		label_proj = "Total année (jusqu'à Décembre)"
+
+		label_item_1 = self.pivot_table.item(row_to_date, 0)
+		if label_item_1 is None:
+			label_item_1 = QtWidgets.QTableWidgetItem()
+			self.pivot_table.setItem(row_to_date, 0, label_item_1)
+		label_item_1.setText(label_to_date)
+
+		label_item_2 = self.pivot_table.item(row_proj, 0)
+		if label_item_2 is None:
+			label_item_2 = QtWidgets.QTableWidgetItem()
+			self.pivot_table.setItem(row_proj, 0, label_item_2)
+		label_item_2.setText(label_proj)
+
+		# Totaux par catégorie sur les lignes synthèse
+		to_date_by_cat: dict[str, float] = {c: 0.0 for c in categories}
+		annual_by_cat: dict[str, float] = {c: 0.0 for c in categories}
+		to_date_budget_by_cat: dict[str, float] = {c: 0.0 for c in categories}
+		annual_budget_by_cat: dict[str, float] = {c: 0.0 for c in categories}
+
+		# Si on a une année sélectionnée, on peut calculer des restes via budgets.
+		use_budgets_for_totals = year is not None and bool(budgets_for_year)
+		for m in range(12):
+			month_key = f"{m + 1:02d}"
+			month_budgets = budgets_for_year.get(month_key, {}) if use_budgets_for_totals else {}
+			for c in categories:
+				expense_val = float(cumuls[m].get(c, 0.0))
+				annual_by_cat[c] += expense_val
+				if m < months_elapsed:
+					to_date_by_cat[c] += expense_val
+
+				# Budget défini même si valeur = 0 (présence de la clé)
+				if use_budgets_for_totals and isinstance(month_budgets, dict) and c in month_budgets:
+					b = float(month_budgets.get(c) or 0.0)
+					annual_budget_by_cat[c] += b
+					if m < months_elapsed:
+						to_date_budget_by_cat[c] += b
+
+		proj_by_cat = dict(annual_by_cat)
+
+		def _set_summary_cell(row_idx: int, col_idx: int, value: float) -> None:
+			item = self.pivot_table.item(row_idx, col_idx)
+			if item is None:
+				item = QtWidgets.QTableWidgetItem()
+				self.pivot_table.setItem(row_idx, col_idx, item)
+			item.setText(f"{value:.2f}")
+			font = item.font()
+			font.setBold(True)
+			item.setFont(font)
+			# Pour les totaux "reste": vert si >0, rouge si <0
+			if value > 0:
+				item.setForeground(QtGui.QBrush(QtGui.QColor("#008000")))
+			elif value < 0:
+				item.setForeground(QtGui.QBrush(QtGui.QColor("#b92020")))
+			else:
+				item.setForeground(QtGui.QBrush())
+
+		for ci, cat in enumerate(categories, start=1):
+			if use_budgets_for_totals and (
+				annual_budget_by_cat.get(cat, 0.0) != 0.0
+				or (f"{1:02d}" in budgets_for_year)
+			):
+				# reste = budget - dépenses
+				to_date_remaining = to_date_budget_by_cat.get(cat, 0.0) - to_date_by_cat.get(cat, 0.0)
+				year_remaining = annual_budget_by_cat.get(cat, 0.0) - annual_by_cat.get(cat, 0.0)
+				_set_summary_cell(row_to_date, ci, to_date_remaining)
+				_set_summary_cell(row_proj, ci, year_remaining)
+				cell_to_date = self.pivot_table.item(row_to_date, ci)
+				cell_year = self.pivot_table.item(row_proj, ci)
+				if cell_to_date:
+					cell_to_date.setToolTip(
+						f"Budget: {to_date_budget_by_cat.get(cat, 0.0):.2f}\nDépenses: {to_date_by_cat.get(cat, 0.0):.2f}"
+					)
+				if cell_year:
+					cell_year.setToolTip(
+						f"Budget: {annual_budget_by_cat.get(cat, 0.0):.2f}\nDépenses: {annual_by_cat.get(cat, 0.0):.2f}"
+					)
+			else:
+				# Fallback: afficher les dépenses si pas de budget
+				_set_summary_cell(row_to_date, ci, to_date_by_cat.get(cat, 0.0))
+				_set_summary_cell(row_proj, ci, proj_by_cat.get(cat, 0.0))
+
+		# Mettre les totaux dans la dernière colonne
+		def _set_summary_total(row_idx: int, value: float) -> None:
+			total_col = len(headers) - 1
+			item = self.pivot_table.item(row_idx, total_col)
+			if item is None:
+				item = QtWidgets.QTableWidgetItem()
+				self.pivot_table.setItem(row_idx, total_col, item)
+			item.setText(f"{value:.2f}")
+			font = item.font()
+			font.setBold(True)
+			item.setFont(font)
+			# Pour les totaux "reste": vert si >0, rouge si <0
+			if value > 0:
+				item.setForeground(QtGui.QBrush(QtGui.QColor("#008000")))
+			elif value < 0:
+				item.setForeground(QtGui.QBrush(QtGui.QColor("#b92020")))
+			else:
+				item.setForeground(QtGui.QBrush())
+
+		if use_budgets_for_totals:
+			# Total reste = budget_total - dépenses_total (sur catégories budgétées)
+			to_date_budget_total = sum(to_date_budget_by_cat.values())
+			year_budget_total = sum(annual_budget_by_cat.values())
+			to_date_remaining_total = to_date_budget_total - total_to_date
+			year_remaining_total = year_budget_total - projection_year_end
+			_set_summary_total(row_to_date, to_date_remaining_total)
+			_set_summary_total(row_proj, year_remaining_total)
+			item1 = self.pivot_table.item(row_to_date, len(headers) - 1)
+			item2 = self.pivot_table.item(row_proj, len(headers) - 1)
+			if item1:
+				item1.setToolTip(
+					f"Budget: {to_date_budget_total:.2f}\nDépenses: {total_to_date:.2f}"
+				)
+			if item2:
+				item2.setToolTip(
+					f"Budget: {year_budget_total:.2f}\nDépenses: {projection_year_end:.2f}"
+				)
+		else:
+			_set_summary_total(row_to_date, total_to_date)
+			_set_summary_total(row_proj, projection_year_end)
 
 	def _update_status(self) -> None:
 		total_rows = self._source_model.rowCount()
@@ -670,6 +1048,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			return
 
 		expenses = read_expenses(self._csv_path)
+		self._expenses_cache = list(expenses)
 		# Mettre à jour les filtres année/mois à partir des dates existantes
 		years: set[int] = set()
 		for exp in expenses:
@@ -677,6 +1056,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			if date.isValid():
 				years.add(date.year())
 
+		years.add(self._default_year)
 		sorted_years = sorted(years)
 		previous_year = self.year_combo.currentText() if self.year_combo.count() else ""
 		previous_month = self.month_combo.currentText() if self.month_combo.count() else ""
@@ -744,6 +1124,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self._source_model.appendRow(items)
 
 		self._update_status()
+		self._update_pivot_totals()
 
 
 def main() -> None:
@@ -752,7 +1133,7 @@ def main() -> None:
 
 	csv_path = Path(__file__).resolve().parent / "saveCompte" / "expenses.csv"
 	window = ExpensesWindow(csv_path)
-	window.show()
+	window.showMaximized()
 	raise SystemExit(app.exec())
 
 
