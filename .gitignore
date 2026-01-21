@@ -2,3 +2,6 @@
 accountManagerEnv/
 saveCompte/
 __pycache__/
+dist/
+build/
+*.exe
