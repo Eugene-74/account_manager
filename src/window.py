@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import csv
+import shutil
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-import logic
-from budget_dialog import BudgetDialog
+from . import logic
+from .budget_dialog import BudgetDialog
+from .translate import LANGUAGE_OPTIONS, set_language, tr
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -99,11 +105,11 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		categories: list[str],
 		parent: QtWidgets.QWidget | None = None,
 		*,
-		title: str = "Ajouter une dépense",
+		title: str | None = None,
 		initial: dict[str, str] | None = None,
 	):
 		super().__init__(parent)
-		self.setWindowTitle(title)
+		self.setWindowTitle(title or tr("dlg.add.title"))
 		self.setModal(True)
 		self.resize(520, 240)
 
@@ -112,28 +118,33 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		layout.addLayout(form)
 
 		self.name_edit = QtWidgets.QLineEdit()
-		self.name_edit.setPlaceholderText("Ex: Courses")
-		form.addRow("Nom", self.name_edit)
+		self.name_edit.setPlaceholderText(tr("ph.name"))
+		self.name_edit.setToolTip(tr("tt.fld.name"))
+		form.addRow(tr("fld.name"), self.name_edit)
 
 		self.date_edit = QtWidgets.QLineEdit()
-		self.date_edit.setPlaceholderText("JJ/MM/AAAA")
-		form.addRow("Date", self.date_edit)
+		self.date_edit.setPlaceholderText(tr("ph.date"))
+		self.date_edit.setToolTip(tr("tt.fld.date"))
+		form.addRow(tr("fld.date"), self.date_edit)
 
 		self.category_combo = QtWidgets.QComboBox()
+		self.category_combo.setToolTip(tr("tt.fld.category"))
 		items = sorted(categories, key=str.casefold)
 		# Si l'élément à éditer utilise une catégorie inconnue, l'ajouter pour pouvoir la sélectionner.
 		if initial and initial.get("category") and initial["category"] not in items:
 			items = [initial["category"].strip()] + items
 		self.category_combo.addItems(items)
-		form.addRow("Catégorie", self.category_combo)
+		form.addRow(tr("fld.category"), self.category_combo)
 
 		self.price_edit = QtWidgets.QLineEdit()
-		self.price_edit.setPlaceholderText("Ex: 12.50")
-		form.addRow("Prix", self.price_edit)
+		self.price_edit.setPlaceholderText(tr("ph.price"))
+		self.price_edit.setToolTip(tr("tt.fld.price"))
+		form.addRow(tr("fld.price"), self.price_edit)
 
 		self.description_edit = QtWidgets.QLineEdit()
-		self.description_edit.setPlaceholderText("Ex: supermarché")
-		form.addRow("Description", self.description_edit)
+		self.description_edit.setPlaceholderText(tr("ph.description"))
+		self.description_edit.setToolTip(tr("tt.fld.description"))
+		form.addRow(tr("fld.description"), self.description_edit)
 
 		buttons = QtWidgets.QDialogButtonBox(
 			QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -174,7 +185,7 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 		parent: QtWidgets.QWidget | None = None,
 	):
 		super().__init__(parent)
-		self.setWindowTitle("Gérer les catégories")
+		self.setWindowTitle(tr("dlg.categories.title"))
 		self.setModal(True)
 		self.resize(520, 360)
 
@@ -183,7 +194,9 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 		layout = QtWidgets.QVBoxLayout(self)
 
 		self.table = QtWidgets.QTableWidget(0, 2)
-		self.table.setHorizontalHeaderLabels(["Catégorie", "Couleur"])
+		self.table.setHorizontalHeaderLabels(
+			[tr("dlg.categories.col_name"), tr("dlg.categories.col_color")]
+		)
 		self.table.horizontalHeader().setStretchLastSection(True)
 		self.table.verticalHeader().setVisible(False)
 		self.table.setSelectionBehavior(
@@ -200,18 +213,22 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 		layout.addLayout(actions)
 
 		self.new_category_edit = QtWidgets.QLineEdit()
-		self.new_category_edit.setPlaceholderText("Nouvelle catégorie")
+		self.new_category_edit.setPlaceholderText(tr("ph.new_category"))
+		self.new_category_edit.setToolTip(tr("tt.new_category"))
 		actions.addWidget(self.new_category_edit, stretch=1)
 
-		self.add_button = QtWidgets.QPushButton("Ajouter")
+		self.add_button = QtWidgets.QPushButton(tr("btn.add"))
+		self.add_button.setToolTip(tr("tt.add_category"))
 		self.add_button.clicked.connect(self._on_add)
 		actions.addWidget(self.add_button)
 
-		self.color_button = QtWidgets.QPushButton("Couleur…")
+		self.color_button = QtWidgets.QPushButton(tr("btn.color"))
+		self.color_button.setToolTip(tr("tt.pick_color"))
 		self.color_button.clicked.connect(self._on_pick_color)
 		actions.addWidget(self.color_button)
 
-		self.remove_button = QtWidgets.QPushButton("Supprimer")
+		self.remove_button = QtWidgets.QPushButton(tr("btn.remove"))
+		self.remove_button.setToolTip(tr("tt.remove_category"))
 		self.remove_button.clicked.connect(self._on_remove)
 		actions.addWidget(self.remove_button)
 
@@ -265,13 +282,17 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 		if not name:
 			return
 		if any(c.casefold() == name.casefold() for c in self.categories()):
-			QtWidgets.QMessageBox.warning(self, "Erreur", "Cette catégorie existe déjà")
+			QtWidgets.QMessageBox.warning(
+				self,
+				tr("dialog.error"),
+				tr("msg.category_exists"),
+			)
 			return
 
 		chosen = QtWidgets.QColorDialog.getColor(
 			QtGui.QColor(self._colors.get(name, "#ffffff")),
 			self,
-			"Choisir une couleur",
+			tr("dlg.categories.choose_color"),
 		)
 		color_hex = chosen.name() if chosen.isValid() else ""
 		self._colors[name] = color_hex
@@ -292,7 +313,7 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 		chosen = QtWidgets.QColorDialog.getColor(
 			QtGui.QColor(current_hex or "#ffffff"),
 			self,
-			f"Couleur pour '{name}'",
+			tr("dlg.categories.color_for", name=name),
 		)
 		if not chosen.isValid():
 			return
@@ -318,8 +339,8 @@ class ManageCategoriesDialog(QtWidgets.QDialog):
 
 		confirm = QtWidgets.QMessageBox.question(
 			self,
-			"Confirmation",
-			f"Supprimer la catégorie '{name}' ?",
+			tr("dialog.confirmation"),
+			tr("msg.confirm_delete_category", name=name),
 			QtWidgets.QMessageBox.StandardButton.Yes
 			| QtWidgets.QMessageBox.StandardButton.No,
 		)
@@ -377,18 +398,26 @@ def read_expenses(csv_path: Path) -> list[Expense]:
 
 
 class ExpensesWindow(QtWidgets.QMainWindow):
-	def __init__(self, csv_path: Path):
+	def __init__(self, data_dir: Path):
 		super().__init__()
-		self._csv_path = csv_path
-		self._options_path = Path(__file__).resolve().parent / "saveCompte" / "qt_options.json"
-		self._budgets_path = Path(__file__).resolve().parent / "saveCompte" / "budgets.json"
+		self._data_dir = Path(data_dir)
+		self._data_dir.mkdir(parents=True, exist_ok=True)
+
+		# Langue (persistée dans settings.json)
+		lang = logic.get_language_setting(self._data_dir, default="fr")
+		set_language(lang)
+		self._current_language = lang
+
+		self._csv_path = self._data_dir / "expenses.csv"
+		self._options_path = self._data_dir / "qt_options.json"
+		self._budgets_path = self._data_dir / "budgets.json"
 		self._categories, self._category_colors = logic.load_category_options(
 			self._options_path
 		)
 		self._categories = sorted(self._categories, key=str.casefold)
 		self._budgets = logic.load_budgets(self._budgets_path)
 
-		self.setWindowTitle("Dépenses")
+		self.setWindowTitle(tr("window.title"))
 		self.resize(1000, 650)
 
 		central = QtWidgets.QWidget(self)
@@ -401,48 +430,73 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		header_layout = QtWidgets.QHBoxLayout()
 		root_layout.addLayout(header_layout)
 
-		title = QtWidgets.QLabel("Liste des dépenses")
+		self.title_label = QtWidgets.QLabel(tr("window.expense_list"))
 		title_font = QtGui.QFont()
 		title_font.setPointSize(14)
 		title_font.setBold(True)
-		title.setFont(title_font)
-		header_layout.addWidget(title)
+		self.title_label.setFont(title_font)
+		header_layout.addWidget(self.title_label)
 
 		header_layout.addStretch(1)
 
 		self.search_edit = QtWidgets.QLineEdit()
-		self.search_edit.setPlaceholderText("Rechercher (nom, date, catégorie, description)")
+		self.search_edit.setPlaceholderText(tr("window.search_placeholder"))
 		self.search_edit.setClearButtonEnabled(True)
+		self.search_edit.setToolTip(tr("tt.search"))
 		self.search_edit.textChanged.connect(self._on_search_changed)
 		header_layout.addWidget(self.search_edit, stretch=2)
 
 		self.year_combo = QtWidgets.QComboBox()
+		self.year_combo.setToolTip(tr("tt.year"))
 		self.year_combo.currentIndexChanged.connect(self._on_year_month_changed)
 		header_layout.addWidget(self.year_combo)
 
 		self.month_combo = QtWidgets.QComboBox()
+		self.month_combo.setToolTip(tr("tt.month"))
 		self.month_combo.currentIndexChanged.connect(self._on_year_month_changed)
 		header_layout.addWidget(self.month_combo)
 
-		self.add_button = QtWidgets.QPushButton("Ajouter")
+		self.language_combo = QtWidgets.QComboBox()
+		for code, label in LANGUAGE_OPTIONS:
+			self.language_combo.addItem(label, code)
+		self.language_combo.setToolTip(tr("tt.language"))
+		# sélection initiale
+		for i in range(self.language_combo.count()):
+			if str(self.language_combo.itemData(i) or "") == self._current_language:
+				self.language_combo.setCurrentIndex(i)
+				break
+		self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+		header_layout.addWidget(self.language_combo)
+
+		self.add_button = QtWidgets.QPushButton(tr("window.add_label"))
+		self.add_button.setToolTip(tr("tt.add"))
 		self.add_button.clicked.connect(self._on_add_clicked)
 		header_layout.addWidget(self.add_button)
 
-		self.delete_button = QtWidgets.QPushButton("Supprimer")
+		self.delete_button = QtWidgets.QPushButton(tr("window.delete_label"))
+		self.delete_button.setToolTip(tr("tt.delete"))
 		self.delete_button.clicked.connect(self._on_delete_clicked)
 		header_layout.addWidget(self.delete_button)
 
-		self.manage_categories_button = QtWidgets.QPushButton("Catégories")
+		self.manage_categories_button = QtWidgets.QPushButton(tr("window.categories_label"))
+		self.manage_categories_button.setToolTip(tr("tt.categories"))
 		self.manage_categories_button.clicked.connect(self._on_manage_categories_clicked)
 		header_layout.addWidget(self.manage_categories_button)
 
-		self.budget_button = QtWidgets.QPushButton("Budget")
+		self.budget_button = QtWidgets.QPushButton(tr("window.budget_label"))
+		self.budget_button.setToolTip(tr("tt.budget"))
 		self.budget_button.clicked.connect(self._on_budget_clicked)
 		header_layout.addWidget(self.budget_button)
 
-		self.reload_button = QtWidgets.QPushButton("Recharger")
+		self.reload_button = QtWidgets.QPushButton(tr("window.reload_label"))
+		self.reload_button.setToolTip(tr("tt.reload"))
 		self.reload_button.clicked.connect(self.reload)
 		header_layout.addWidget(self.reload_button)
+
+		self.restore_button = QtWidgets.QPushButton(tr("window.restore_label"))
+		self.restore_button.setToolTip(tr("tt.restore"))
+		self.restore_button.clicked.connect(self._on_restore_clicked)
+		header_layout.addWidget(self.restore_button)
 
 		self.path_label = QtWidgets.QLabel(str(self._csv_path))
 		self.path_label.setTextInteractionFlags(
@@ -453,6 +507,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		self.table = QtWidgets.QTableView()
 		self.table.setAlternatingRowColors(True)
+		self.table.setToolTip(tr("tt.table"))
 		self.table.setSelectionBehavior(
 			QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
 		)
@@ -469,14 +524,16 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.summary_layout.setSpacing(10)
 		root_layout.addLayout(self.summary_layout)
 
-		self.pivot_group = QtWidgets.QGroupBox("Totaux par mois / catégorie")
+		self.pivot_group = QtWidgets.QGroupBox(tr("window.totals_group"))
 		pivot_layout = QtWidgets.QVBoxLayout(self.pivot_group)
 		pivot_layout.setContentsMargins(8, 8, 8, 8)
 		pivot_layout.setSpacing(6)
 
 		# Tableau pivot: 12 lignes (mois) + 2 lignes synthèse, colonnes dynamiques = catégories + Total
 		self.pivot_table = QtWidgets.QTableWidget(14, 2)
-		self.pivot_table.setHorizontalHeaderLabels(["Mois", "Total"])
+		self.pivot_table.setHorizontalHeaderLabels(
+			[tr("window.pivot_month"), tr("window.pivot_total")]
+		)
 		self.pivot_table.horizontalHeader().setStretchLastSection(True)
 		self.pivot_table.verticalHeader().setVisible(False)
 		self.pivot_table.setEditTriggers(
@@ -492,8 +549,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			month_item = QtWidgets.QTableWidgetItem(f"{i + 1:02d}")
 			self.pivot_table.setItem(i, 0, month_item)
 		# 2 lignes de synthèse
-		self.pivot_table.setItem(12, 0, QtWidgets.QTableWidgetItem("Total à date"))
-		self.pivot_table.setItem(13, 0, QtWidgets.QTableWidgetItem("Projection fin d'année"))
+		self.pivot_table.setItem(12, 0, QtWidgets.QTableWidgetItem(tr("window.pivot_total_to_date")))
+		self.pivot_table.setItem(13, 0, QtWidgets.QTableWidgetItem(tr("window.pivot_year_projection")))
 
 		pivot_layout.addWidget(self.pivot_table)
 
@@ -504,13 +561,22 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		self._source_model = QtGui.QStandardItemModel(0, 6, self)
 		self._source_model.setHorizontalHeaderLabels(
-			["Id", "Nom", "Date", "Prix", "Catégorie", "Description"]
+			[
+				tr("col.id"),
+				tr("col.name"),
+				tr("col.date"),
+				tr("col.price"),
+				tr("col.category"),
+				tr("col.description"),
+			]
 		)
 
 		self._proxy = ExpensesProxyModel(self)
 		self._proxy.setSourceModel(self._source_model)
 		self.table.setModel(self._proxy)
 		self.table.doubleClicked.connect(self._on_table_double_clicked)
+		self.table.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+		self.table.customContextMenuRequested.connect(self._on_table_context_menu)
 		self.table.setColumnHidden(0, True)
 		# Tri par défaut: Date (plus récent d'abord)
 		self.table.sortByColumn(2, QtCore.Qt.SortOrder.AscendingOrder)
@@ -521,30 +587,71 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		current = QtCore.QDate.currentDate()
 		self._default_year = current.year()
 		self._default_month = current.month()
-		self._month_names = [
-			"Janvier",
-			"Février",
-			"Mars",
-			"Avril",
-			"Mai",
-			"Juin",
-			"Juillet",
-			"Août",
-			"Septembre",
-			"Octobre",
-			"Novembre",
-			"Décembre",
-		]
+		self._month_names = self._get_month_names()
 
 		self.reload()
 
+	def _on_language_changed(self) -> None:
+		lang = str(self.language_combo.currentData() or "fr").strip().lower() or "fr"
+		self._current_language = lang
+		logic.set_language_setting(self._data_dir, lang)
+		set_language(lang)
+		self._retranslate_ui()
+		# Recharger pour rafraîchir les libellés dynamiques (ex: "Tous")
+		self.reload()
+
+	def _retranslate_ui(self) -> None:
+		self._month_names = self._get_month_names()
+		self.setWindowTitle(tr("window.title"))
+		self.title_label.setText(tr("window.expense_list"))
+		self.search_edit.setPlaceholderText(tr("window.search_placeholder"))
+		self.search_edit.setToolTip(tr("tt.search"))
+		self.year_combo.setToolTip(tr("tt.year"))
+		self.month_combo.setToolTip(tr("tt.month"))
+		self.language_combo.setToolTip(tr("tt.language"))
+		self.add_button.setText(tr("window.add_label"))
+		self.add_button.setToolTip(tr("tt.add"))
+		self.delete_button.setText(tr("window.delete_label"))
+		self.delete_button.setToolTip(tr("tt.delete"))
+		self.manage_categories_button.setText(tr("window.categories_label"))
+		self.manage_categories_button.setToolTip(tr("tt.categories"))
+		self.budget_button.setText(tr("window.budget_label"))
+		self.budget_button.setToolTip(tr("tt.budget"))
+		self.reload_button.setText(tr("window.reload_label"))
+		self.reload_button.setToolTip(tr("tt.reload"))
+		self.restore_button.setText(tr("window.restore_label"))
+		self.restore_button.setToolTip(tr("tt.restore"))
+		self.table.setToolTip(tr("tt.table"))
+		self.pivot_group.setTitle(tr("window.totals_group"))
+
+		self._source_model.setHorizontalHeaderLabels(
+			[
+				tr("col.id"),
+				tr("col.name"),
+				tr("col.date"),
+				tr("col.price"),
+				tr("col.category"),
+				tr("col.description"),
+			]
+		)
+		# Pivot headers (first + last columns) when table is small
+		if self.pivot_table.columnCount() >= 2:
+			headers = self.pivot_table.horizontalHeaderItem(0)
+			if headers is not None:
+				headers.setText(tr("window.pivot_month"))
+			headers2 = self.pivot_table.horizontalHeaderItem(self.pivot_table.columnCount() - 1)
+			if headers2 is not None:
+				headers2.setText(tr("window.pivot_total"))
+
+	def _get_month_names(self) -> list[str]:
+		return [tr(f"month.{i:02d}") for i in range(1, 13)]
+
 	def _selected_year_or_current(self) -> int:
-		year_text = self.year_combo.currentText().strip() if self.year_combo.count() else "Tous"
-		if year_text and year_text != "Tous":
-			try:
-				return int(year_text)
-			except ValueError:
-				pass
+		year_data = self.year_combo.currentData() if self.year_combo.count() else None
+		if isinstance(year_data, int):
+			return year_data
+		if isinstance(year_data, str) and year_data.strip().isdigit():
+			return int(year_data.strip())
 		return QtCore.QDate.currentDate().year()
 
 	def _on_budget_clicked(self) -> None:
@@ -566,7 +673,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self._budgets[year_key] = dlg.budgets()
 			logic.save_budgets(self._budgets_path, self._budgets)
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 		self._update_pivot_totals()
 
@@ -574,8 +681,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		if not self._categories:
 			QtWidgets.QMessageBox.warning(
 				self,
-				"Catégories",
-				"Aucune catégorie disponible. Ajoute-en une dans 'Catégories'.",
+				tr("dialog.categories"),
+				tr("msg.no_category"),
 			)
 			return
 
@@ -594,10 +701,10 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 				description=values["description"],
 			)
 		except logic.DuplicateExpenseError as exc:
-			QtWidgets.QMessageBox.warning(self, "Doublon", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.duplicate"), str(exc))
 			return
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 		self.reload()
 
@@ -630,7 +737,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		dlg = AddExpenseDialog(
 			self._categories,
 			self,
-			title="Modifier une dépense",
+			title=tr("dlg.edit.title"),
 			initial=old,
 		)
 		if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
@@ -650,12 +757,43 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 				],
 			)
 		except logic.DuplicateExpenseError as exc:
-			QtWidgets.QMessageBox.warning(self, "Doublon", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.duplicate"), str(exc))
 			return
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 		self.reload()
+
+	def _on_table_context_menu(self, pos: QtCore.QPoint) -> None:
+		# Clic droit sur la table: ajouter/supprimer rapidement.
+		index = self.table.indexAt(pos)
+		if index.isValid():
+			# Sélectionner la ligne cliquée avant d'ouvrir le menu.
+			self.table.setCurrentIndex(index)
+			selection = self.table.selectionModel()
+			if selection is not None:
+				selection.select(
+					index,
+					QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect
+					| QtCore.QItemSelectionModel.SelectionFlag.Rows,
+				)
+
+		menu = QtWidgets.QMenu(self)
+		edit_action = menu.addAction(tr("window.context_edit"))
+		delete_action = menu.addAction(tr("window.context_delete"))
+		edit_action.setEnabled(index.isValid())
+		delete_action.setEnabled(index.isValid())
+
+		def _edit_current() -> None:
+			current = self.table.currentIndex()
+			if not current.isValid():
+				return
+			self._on_table_double_clicked(current)
+
+		edit_action.triggered.connect(_edit_current)
+		delete_action.triggered.connect(self._on_delete_clicked)
+
+		menu.exec(self.table.viewport().mapToGlobal(pos))
 
 	def _on_delete_clicked(self) -> None:
 		selection = self.table.selectionModel()
@@ -673,13 +811,13 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		expense_id = str(self._source_model.index(row, 0).data() or "").strip()
 		if not expense_id:
-			QtWidgets.QMessageBox.warning(self, "Erreur", "Id de dépense introuvable")
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), tr("msg.expense_id_missing"))
 			return
 
 		confirm = QtWidgets.QMessageBox.question(
 			self,
-			"Confirmation",
-			"Supprimer la dépense sélectionnée ?",
+			tr("dialog.confirmation"),
+			tr("msg.confirm_delete_expense"),
 			QtWidgets.QMessageBox.StandardButton.Yes
 			| QtWidgets.QMessageBox.StandardButton.No,
 		)
@@ -689,7 +827,52 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		try:
 			logic.delete_expense(self._csv_path, expense_id=expense_id)
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
+			return
+		self.reload()
+
+	def _on_restore_clicked(self) -> None:
+		# Restaurer un backup CSV (ex: YYYY-MM-DD.csv) vers expenses.csv
+		filename, _filter = QtWidgets.QFileDialog.getOpenFileName(
+			self,
+			tr("window.restore_title"),
+			str(self._data_dir),
+			"CSV (*.csv)",
+		)
+		if not filename:
+			return
+
+		src = Path(filename)
+		if not src.exists() or not src.is_file():
+			QtWidgets.QMessageBox.warning(self, tr("dialog.restore"), tr("window.restore_missing"))
+			return
+
+		confirm = QtWidgets.QMessageBox.question(
+			self,
+			tr("dialog.confirmation"),
+			tr("window.restore_confirm", filename=src.name),
+			QtWidgets.QMessageBox.StandardButton.Yes
+			| QtWidgets.QMessageBox.StandardButton.No,
+		)
+		if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+			return
+
+		# Backup de sécurité avant écrasement
+		try:
+			if self._csv_path.exists() and self._csv_path.is_file():
+				ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+				safety = self._data_dir / f"expenses_before_restore_{ts}.csv"
+				shutil.copy2(self._csv_path, safety)
+		except OSError:
+			# Non bloquant
+			pass
+
+		try:
+			shutil.copy2(src, self._csv_path)
+			logic.migrate_expense_ids(self._csv_path)
+			logic.backup_expenses_daily(self._csv_path)
+		except OSError as exc:
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 		self.reload()
 
@@ -707,16 +890,17 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self._categories = sorted(self._categories, key=str.casefold)
 			self.reload()
 		except Exception as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 
 	def _on_search_changed(self, text: str) -> None:
 		self._proxy.setSearchText(text)
 		self._update_status()
 
 	def _on_year_month_changed(self) -> None:
-		year_text = self.year_combo.currentText().strip() if self.year_combo.count() else "Tous"
-		if year_text == "Tous" or year_text == "":
-			self.month_combo.setCurrentText("Tous")
+		year_data = self.year_combo.currentData() if self.year_combo.count() else None
+		if year_data is None:
+			if self.month_combo.count():
+				self.month_combo.setCurrentIndex(0)
 			self.month_combo.setEnabled(False)
 			self._proxy.setYearMonthFilter(None, None)
 			self._update_status()
@@ -724,23 +908,9 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			return
 
 		self.month_combo.setEnabled(True)
-		try:
-			year = int(year_text)
-		except ValueError:
-			self._proxy.setYearMonthFilter(None, None)
-			self._update_status()
-			self._update_pivot_totals()
-			return
-
-		month_text = self.month_combo.currentText().strip()
-		month: int | None
-		if month_text == "Tous" or month_text == "":
-			month = None
-		else:
-			try:
-				month = int(month_text)
-			except ValueError:
-				month = None
+		year = int(year_data)
+		month_data = self.month_combo.currentData() if self.month_combo.count() else None
+		month = int(month_data) if isinstance(month_data, int) else None
 
 		self._proxy.setYearMonthFilter(year, month)
 		self._update_status()
@@ -748,18 +918,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 	def _update_pivot_totals(self) -> None:
 		"""Met à jour un tableau pivot: 1 ligne/mois, colonnes = catégories + Total."""
-
-		year_text = (
-			self.year_combo.currentText().strip() if self.year_combo.count() else "Tous"
-		)
-		year: int | None
-		if year_text == "Tous" or year_text == "":
-			year = None
-		else:
-			try:
-				year = int(year_text)
-			except ValueError:
-				year = None
+		year_data = self.year_combo.currentData() if self.year_combo.count() else None
+		year: int | None = int(year_data) if isinstance(year_data, int) else None
 
 		# Colonnes = toutes les catégories connues + celles présentes dans les dépenses
 		category_set: set[str] = set(self._categories)
@@ -768,14 +928,13 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			if cat:
 				category_set.add(cat)
 			else:
-				category_set.add("(Sans catégorie)")
+				category_set.add(tr("pivot.uncategorized"))
 		categories = sorted(category_set, key=str.casefold)
 		year_key = str(year) if year is not None else ""
 		budgets_for_year: dict[str, dict[str, float]] = (
 			self._budgets.get(year_key, {}) if year_key else {}
 		)
-
-		headers = ["Mois", *categories, "Total"]
+		headers = [tr("window.pivot_month"), *categories, tr("window.pivot_total")]
 		self.pivot_table.setColumnCount(len(headers))
 		self.pivot_table.setHorizontalHeaderLabels(headers)
 		self.pivot_table.horizontalHeader().setStretchLastSection(True)
@@ -798,7 +957,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 				continue
 			cat = (exp.category or "").strip()
 			if not cat:
-				cat = "(Sans catégorie)"
+				cat = tr("pivot.uncategorized")
 			cumuls[m][cat] = cumuls[m].get(cat, 0.0) + value
 
 		annual_total = 0.0
@@ -841,7 +1000,12 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 					# Afficher le reste (budget - dépenses)
 					cell.setText(f"{remaining:.2f}")
 					cell.setToolTip(
-						f"Budget: {budget:.2f}\nDépenses: {float(val):.2f}\nReste: {remaining:.2f}"
+						tr(
+							"pivot.tooltip.cell",
+							budget=budget,
+							expenses=float(val),
+							remaining=remaining,
+						)
 					)
 					cell.setBackground(QtGui.QBrush())
 					if remaining < 0:
@@ -866,7 +1030,12 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 				remaining_total = month_budget_total - month_expenses_on_budget_total
 				total_item.setText(f"{remaining_total:.2f}")
 				total_item.setToolTip(
-					f"Budget total: {month_budget_total:.2f}\nDépenses: {month_expenses_on_budget_total:.2f}\nReste: {remaining_total:.2f}"
+					tr(
+						"pivot.tooltip.total",
+						budget=month_budget_total,
+						expenses=month_expenses_on_budget_total,
+						remaining=remaining_total,
+					)
 				)
 				# Couleur standard pour le reste: vert si positif, rouge si négatif
 				if remaining_total < 0:
@@ -889,8 +1058,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			annual_total += row_total
 			monthly_totals[m] = row_total
 
-		label_year = year_text if year is not None else "Tous"
-		self.pivot_group.setTitle(f"Totaux par mois / catégorie ({label_year})")
+		label_year = str(year) if year is not None else tr("filter.all")
+		self.pivot_group.setTitle(tr("pivot.group_title", year=label_year))
 
 		# Lignes synthèse
 		current = QtCore.QDate.currentDate()
@@ -906,10 +1075,13 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		# Labels
 		row_to_date = 12
 		row_proj = 13
-		label_to_date = "Total à date"
+		label_to_date = tr("pivot.label_to_date")
 		if is_current_year:
-			label_to_date = f"Total à date (jusqu'à {self._month_names[months_elapsed - 1]})"
-		label_proj = "Total année (jusqu'à Décembre)"
+			label_to_date = tr(
+				"pivot.label_to_date_until",
+				month=self._month_names[months_elapsed - 1],
+			)
+		label_proj = tr("pivot.label_year_total")
 
 		label_item_1 = self.pivot_table.item(row_to_date, 0)
 		if label_item_1 is None:
@@ -980,11 +1152,19 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 				cell_year = self.pivot_table.item(row_proj, ci)
 				if cell_to_date:
 					cell_to_date.setToolTip(
-						f"Budget: {to_date_budget_by_cat.get(cat, 0.0):.2f}\nDépenses: {to_date_by_cat.get(cat, 0.0):.2f}"
+						tr(
+							"pivot.tooltip.summary",
+							budget=to_date_budget_by_cat.get(cat, 0.0),
+							expenses=to_date_by_cat.get(cat, 0.0),
+						)
 					)
 				if cell_year:
 					cell_year.setToolTip(
-						f"Budget: {annual_budget_by_cat.get(cat, 0.0):.2f}\nDépenses: {annual_by_cat.get(cat, 0.0):.2f}"
+						tr(
+							"pivot.tooltip.summary",
+							budget=annual_budget_by_cat.get(cat, 0.0),
+							expenses=annual_by_cat.get(cat, 0.0),
+						)
 					)
 			else:
 				# Fallback: afficher les dépenses si pas de budget
@@ -1022,11 +1202,19 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			item2 = self.pivot_table.item(row_proj, len(headers) - 1)
 			if item1:
 				item1.setToolTip(
-					f"Budget: {to_date_budget_total:.2f}\nDépenses: {total_to_date:.2f}"
+					tr(
+						"pivot.tooltip.summary",
+						budget=to_date_budget_total,
+						expenses=total_to_date,
+					)
 				)
 			if item2:
 				item2.setToolTip(
-					f"Budget: {year_budget_total:.2f}\nDépenses: {projection_year_end:.2f}"
+					tr(
+						"pivot.tooltip.summary",
+						budget=year_budget_total,
+						expenses=projection_year_end,
+					)
 				)
 		else:
 			_set_summary_total(row_to_date, total_to_date)
@@ -1036,9 +1224,9 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		total_rows = self._source_model.rowCount()
 		visible_rows = self._proxy.rowCount()
 		if self.search_edit.text().strip():
-			self.status.showMessage(f"{visible_rows} / {total_rows} dépenses (filtrées)")
+			self.status.showMessage(tr("status.filtered", visible=visible_rows, total=total_rows))
 		else:
-			self.status.showMessage(f"{total_rows} dépenses")
+			self.status.showMessage(tr("status.total", total=total_rows))
 
 	def reload(self) -> None:
 		self._source_model.removeRows(0, self._source_model.rowCount())
@@ -1046,7 +1234,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		try:
 			logic.migrate_expense_ids(self._csv_path)
 		except Exception as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 
 		expenses = read_expenses(self._csv_path)
@@ -1066,19 +1254,24 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.year_combo.blockSignals(True)
 		self.month_combo.blockSignals(True)
 		self.year_combo.clear()
-		self.year_combo.addItem("Tous")
+		self.year_combo.addItem(tr("filter.all"), None)
 		for y in sorted_years:
-			self.year_combo.addItem(str(y))
+			self.year_combo.addItem(str(y), int(y))
 
 		self.month_combo.clear()
-		self.month_combo.addItem("Tous")
+		self.month_combo.addItem(tr("filter.all"), None)
 		for m in range(1, 13):
-			self.month_combo.addItem(f"{m:02d}")
+			self.month_combo.addItem(f"{m:02d}", int(m))
 
 		# Défaut: année+mois actuels si disponibles, sinon restaurer la sélection.
 		if str(self._default_year) in [str(y) for y in sorted_years]:
-			self.year_combo.setCurrentText(str(self._default_year))
-			self.month_combo.setCurrentText(f"{self._default_month:02d}")
+			# Choix par data
+			idx_year = self.year_combo.findData(int(self._default_year))
+			if idx_year >= 0:
+				self.year_combo.setCurrentIndex(idx_year)
+			idx_month = self.month_combo.findData(int(self._default_month))
+			if idx_month >= 0:
+				self.month_combo.setCurrentIndex(idx_month)
 		else:
 			if previous_year:
 				self.year_combo.setCurrentText(previous_year)
@@ -1133,8 +1326,19 @@ def main() -> None:
 	app = QtWidgets.QApplication([])
 	app.setApplicationName("Compte - Dépenses")
 
-	csv_path = Path(__file__).resolve().parent / "saveCompte" / "expenses.csv"
-	window = ExpensesWindow(csv_path)
+	# Migration auto depuis l'ancien dossier du projet (saveCompte) vers LocalAppData.
+	data_dir = logic.migrate_legacy_project_data(PROJECT_ROOT / "saveCompte")
+
+	icon_path = PROJECT_ROOT / "resources" / "app.ico"
+	try:
+		if icon_path.is_file() and icon_path.stat().st_size > 0:
+			app.setWindowIcon(QtGui.QIcon(str(icon_path)))
+	except OSError:
+		pass
+
+	window = ExpensesWindow(data_dir)
+	if not app.windowIcon().isNull():
+		window.setWindowIcon(app.windowIcon())
 	window.showMaximized()
 	raise SystemExit(app.exec())
 

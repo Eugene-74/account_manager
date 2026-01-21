@@ -1,5 +1,5 @@
 
 call accountManagerEnv\env\Scripts\activate.bat
 
-python ./window.py
+python -m src.window
 

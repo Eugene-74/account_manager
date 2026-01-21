@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-import logic
+from . import logic
+from .translate import tr
 
 
 class BudgetDialog(QtWidgets.QDialog):
@@ -16,7 +17,7 @@ class BudgetDialog(QtWidgets.QDialog):
 		parent: QtWidgets.QWidget | None = None,
 	):
 		super().__init__(parent)
-		self.setWindowTitle(f"Budgets {year}")
+		self.setWindowTitle(tr("budget.title", year=year))
 		self.setModal(True)
 		self.resize(900, 520)
 
@@ -27,10 +28,7 @@ class BudgetDialog(QtWidgets.QDialog):
 
 		layout = QtWidgets.QVBoxLayout(self)
 
-		info = QtWidgets.QLabel(
-			"Saisis un budget par mois et par catégorie.\n"
-			"Tu peux entrer un nombre ou un calcul (ex: 100+20)."
-		)
+		info = QtWidgets.QLabel(tr("dlg.budget.info"))
 		info.setStyleSheet("color: #555;")
 		layout.addWidget(info)
 
@@ -50,22 +48,22 @@ class BudgetDialog(QtWidgets.QDialog):
 
 		actions = QtWidgets.QHBoxLayout()
 		layout.addLayout(actions)
-		self.copy_row_button = QtWidgets.QPushButton("Copier la ligne")
+		self.copy_row_button = QtWidgets.QPushButton(tr("dlg.budget.copy_row"))
 		self.copy_row_button.clicked.connect(self._copy_row)
 		actions.addWidget(self.copy_row_button)
 
-		self.paste_row_button = QtWidgets.QPushButton("Coller sur lignes sélectionnées")
+		self.paste_row_button = QtWidgets.QPushButton(tr("dlg.budget.paste_row"))
 		self.paste_row_button.clicked.connect(self._paste_row_to_selected_rows)
 		self.paste_row_button.setEnabled(False)
 		actions.addWidget(self.paste_row_button)
 
 		actions.addStretch(1)
 
-		self.apply_year_button = QtWidgets.QPushButton("Appliquer sur l'année…")
+		self.apply_year_button = QtWidgets.QPushButton(tr("dlg.budget.apply_year"))
 		self.apply_year_button.clicked.connect(self._apply_to_year)
 		actions.addWidget(self.apply_year_button)
 
-		self.apply_button = QtWidgets.QPushButton("Appliquer à la sélection…")
+		self.apply_button = QtWidgets.QPushButton(tr("dlg.budget.apply_selection"))
 		self.apply_button.clicked.connect(self._apply_to_selection)
 		actions.addWidget(self.apply_button)
 
@@ -152,22 +150,22 @@ class BudgetDialog(QtWidgets.QDialog):
 		if not indexes:
 			QtWidgets.QMessageBox.information(
 				self,
-				"Budget",
-				"Sélectionne une ou plusieurs cases budget (pas la colonne Mois).",
+				tr("dialog.budget"),
+				tr("budget.msg.select_cells"),
 			)
 			return
 
 		text, ok = QtWidgets.QInputDialog.getText(
 			self,
-			"Appliquer",
-			"Valeur à appliquer (nombre ou calcul, vide pour effacer):",
+			tr("dlg.budget.apply_selection"),
+			tr("budget.prompt.apply"),
 		)
 		if not ok:
 			return
 		try:
 			self._apply_value_to_indexes(text, indexes)
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 
 	def _apply_to_year(self) -> None:
 		# Applique une valeur sur 12 mois pour les colonnes (catégories) sélectionnées.
@@ -180,15 +178,15 @@ class BudgetDialog(QtWidgets.QDialog):
 		if not cols:
 			QtWidgets.QMessageBox.information(
 				self,
-				"Budget",
-				"Sélectionne au moins une cellule dans une colonne catégorie.",
+				tr("dialog.budget"),
+				tr("budget.msg.select_column"),
 			)
 			return
 
 		text, ok = QtWidgets.QInputDialog.getText(
 			self,
-			"Appliquer sur l'année",
-			"Valeur mensuelle à appliquer sur Jan→Déc (nombre ou calcul, vide pour effacer):",
+			tr("dlg.budget.apply_year"),
+			tr("budget.prompt.apply_year"),
 		)
 		if not ok:
 			return
@@ -200,7 +198,7 @@ class BudgetDialog(QtWidgets.QDialog):
 		try:
 			self._apply_value_to_indexes(text, all_indexes)
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 
 	def _copy_row(self) -> None:
 		row = self.table.currentRow()
@@ -245,4 +243,4 @@ class BudgetDialog(QtWidgets.QDialog):
 		try:
 			self._apply_value_to_indexes(text, [i for i in indexes if i != current])
 		except ValueError as exc:
-			QtWidgets.QMessageBox.warning(self, "Erreur", str(exc))
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))

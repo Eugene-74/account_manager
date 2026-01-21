@@ -4,7 +4,116 @@ import csv
 import json
 import ast
 import uuid
+import os
+import shutil
+from datetime import date
 from pathlib import Path
+
+
+def get_data_dir(app_folder_name: str = "accountManager") -> Path:
+    """Retourne le dossier de données de l'app.
+
+    Sous Windows: %LOCALAPPDATA%\\accountManager
+    """
+
+    app_folder_name = (app_folder_name or "accountManager").strip() or "accountManager"
+    base = os.getenv("LOCALAPPDATA")
+    if base:
+        return Path(base) / app_folder_name
+
+    # Fallback (rare): tente APPDATA puis HOME.
+    base = os.getenv("APPDATA")
+    if base:
+        return Path(base) / app_folder_name
+
+    return Path.home() / "AppData" / "Local" / app_folder_name
+
+
+def ensure_data_dir(app_folder_name: str = "accountManager") -> Path:
+    data_dir = get_data_dir(app_folder_name)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+def migrate_legacy_project_data(project_save_dir: Path, *, app_folder_name: str = "accountManager") -> Path:
+    """Copie les anciennes données du projet vers le dossier LocalAppData.
+
+    Ne remplace jamais les fichiers déjà existants dans le nouveau dossier.
+    """
+
+    data_dir = ensure_data_dir(app_folder_name)
+    legacy_dir = Path(project_save_dir)
+    if not legacy_dir.exists() or not legacy_dir.is_dir():
+        return data_dir
+
+    for src in legacy_dir.iterdir():
+        if not src.is_file():
+            continue
+        dst = data_dir / src.name
+        if dst.exists():
+            continue
+        try:
+            shutil.copy2(src, dst)
+        except OSError:
+            # En cas d'échec (permissions/antivirus), on ignore et on continue.
+            continue
+
+    return data_dir
+
+
+def load_app_settings(data_dir: Path) -> dict:
+    """Charge les settings de l'app depuis settings.json (dans data_dir)."""
+
+    data_dir = Path(data_dir)
+    path = data_dir / "settings.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_app_settings(data_dir: Path, settings: dict) -> None:
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / "settings.json"
+    payload = settings if isinstance(settings, dict) else {}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_language_setting(data_dir: Path, *, default: str = "fr") -> str:
+    settings = load_app_settings(data_dir)
+    lang = settings.get("language")
+    if isinstance(lang, str) and lang.strip():
+        return lang.strip().lower()
+    return default
+
+
+def set_language_setting(data_dir: Path, lang: str) -> None:
+    settings = load_app_settings(data_dir)
+    settings["language"] = (lang or "fr").strip().lower() or "fr"
+    save_app_settings(data_dir, settings)
+
+
+def backup_expenses_daily(csv_path: Path) -> Path | None:
+    """Sauvegarde une copie quotidienne de expenses.csv.
+
+    Crée/écrase le fichier YYYY-MM-DD.csv dans le même dossier que expenses.csv.
+    Retourne le chemin du backup si effectué.
+    """
+
+    csv_path = Path(csv_path)
+    if not csv_path.exists() or not csv_path.is_file():
+        return None
+
+    backup_path = csv_path.parent / f"{date.today().isoformat()}.csv"
+    try:
+        shutil.copy2(csv_path, backup_path)
+    except OSError:
+        return None
+    return backup_path
 
 
 class DuplicateExpenseError(ValueError):
@@ -378,6 +487,8 @@ def add_expense(
         writer = csv.writer(file)
         writer.writerow(row)
 
+    backup_expenses_daily(csv_path)
+
 
 def update_expense(
     csv_path: Path,
@@ -450,6 +561,8 @@ def update_expense(
         writer = csv.writer(file)
         writer.writerows(rows)
 
+    backup_expenses_daily(csv_path)
+
 
 def delete_expense(csv_path: Path, *, expense_id: str) -> None:
     """Supprime une dépense par son id."""
@@ -482,6 +595,8 @@ def delete_expense(csv_path: Path, *, expense_id: str) -> None:
     with csv_path.open(mode="w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         writer.writerows(kept)
+
+    backup_expenses_daily(csv_path)
 
 
 def migrate_expense_ids(csv_path: Path) -> None:
@@ -547,3 +662,5 @@ def migrate_expense_ids(csv_path: Path) -> None:
     with csv_path.open(mode="w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         writer.writerows(new_rows)
+
+    backup_expenses_daily(csv_path)
