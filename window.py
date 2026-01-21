@@ -512,6 +512,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.table.setModel(self._proxy)
 		self.table.doubleClicked.connect(self._on_table_double_clicked)
 		self.table.setColumnHidden(0, True)
+		# Tri par défaut: Date (plus récent d'abord)
+		self.table.sortByColumn(2, QtCore.Qt.SortOrder.AscendingOrder)
 
 		self._expenses_cache: list[Expense] = []
 
