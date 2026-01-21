@@ -2,11 +2,77 @@ from __future__ import annotations
 
 import csv
 import json
+import ast
+import uuid
 from pathlib import Path
 
 
 class DuplicateExpenseError(ValueError):
     pass
+
+
+def _eval_arithmetic_expression(expr: str) -> float:
+    """Évalue une expression arithmétique simple en toute sécurité.
+
+    Supporte: +, -, *, /, parenthèses et nombres.
+    Ex: "4+5*6" -> 34
+    """
+
+    expr = (expr or "").strip()
+    if not expr:
+        raise ValueError("Prix invalide")
+
+    try:
+        node = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError("Prix invalide") from exc
+
+    def _eval(n: ast.AST) -> float:
+        if isinstance(n, ast.Expression):
+            return _eval(n.body)
+
+        # Python 3.11+: literals are ast.Constant
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return float(n.value)
+
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+            value = _eval(n.operand)
+            return value if isinstance(n.op, ast.UAdd) else -value
+
+        if isinstance(n, ast.BinOp) and isinstance(
+            n.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)
+        ):
+            left = _eval(n.left)
+            right = _eval(n.right)
+            if isinstance(n.op, ast.Add):
+                return left + right
+            if isinstance(n.op, ast.Sub):
+                return left - right
+            if isinstance(n.op, ast.Mult):
+                return left * right
+            # Div
+            return left / right
+
+        raise ValueError("Prix invalide")
+
+    return _eval(node)
+
+
+def parse_price_to_float(price: str) -> float:
+    value = (price or "").strip().replace(",", ".")
+    if value == "":
+        return 0.0
+    value = value.replace(" ", "")
+    try:
+        return float(value)
+    except ValueError:
+        return float(_eval_arithmetic_expression(value))
+
+
+def format_price(price: str) -> str:
+    """Normalise un prix saisi en texte vers un affichage float."""
+    val = parse_price_to_float(price)
+    return f"{val:.2f}"
 
 
 DEFAULT_CATEGORIES = [
@@ -215,14 +281,14 @@ def add_expense(
     description: str,
     allow_duplicates: bool = False,
 ) -> None:
-    """Ajoute une dépense au format: name,date,price,category,description."""
+    """Ajoute une dépense au format: id,name,date,price,category,description."""
 
     csv_path = Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     name = name.strip()
     date = date.strip()
-    price = price.strip().replace(",", ".")
+    price = price.strip()
     category = category.strip()
     description = description.strip()
 
@@ -232,18 +298,201 @@ def add_expense(
         raise ValueError("La date est obligatoire")
     if not category:
         raise ValueError("La catégorie est obligatoire")
-    if price == "":
-        price = "0"
+    try:
+        # Validation uniquement: on conserve l'expression pour l'édition.
+        _ = parse_price_to_float(price)
+    except ValueError as exc:
+        raise ValueError("Prix invalide") from exc
 
-    row = [name, date, price, category, description]
+    # S'assurer que le fichier est déjà migré (sinon les comparaisons seraient incohérentes)
+    migrate_expense_ids(csv_path)
+
+    details = [name, date, price, category, description]
+    row = [uuid.uuid4().hex, *details]
 
     if csv_path.exists() and not allow_duplicates:
         with csv_path.open(mode="r", encoding="utf-8", newline="") as file:
             reader = csv.reader(file)
             for existing in reader:
-                if existing == row:
+                if not existing:
+                    continue
+                # format attendu: [id, name, date, price, category, description]
+                if len(existing) >= 6 and existing[1:6] == details:
+                    raise DuplicateExpenseError("Cette dépense existe déjà")
+                # compat ancien format (au cas où)
+                if len(existing) == 5 and existing == details:
                     raise DuplicateExpenseError("Cette dépense existe déjà")
 
     with csv_path.open(mode="a", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(row)
+
+
+def update_expense(
+    csv_path: Path,
+    *,
+    expense_id: str,
+    new: list[str],
+    allow_duplicates: bool = False,
+) -> None:
+    """Met à jour une dépense en remplaçant la ligne identifiée par son id.
+
+    Le format attendu pour new est: [name, date, price, category, description].
+    """
+
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise ValueError("Fichier de dépenses introuvable")
+
+    migrate_expense_ids(csv_path)
+
+    expense_id = (expense_id or "").strip()
+    if not expense_id:
+        raise ValueError("Id de dépense invalide")
+
+    if len(new) != 5:
+        raise ValueError("Format de dépense invalide")
+
+    name = (new[0] or "").strip()
+    date = (new[1] or "").strip()
+    price = (new[2] or "").strip()
+    category = (new[3] or "").strip()
+    description = (new[4] or "").strip()
+
+    if not name:
+        raise ValueError("Le nom est obligatoire")
+    if not date:
+        raise ValueError("La date est obligatoire")
+    if not category:
+        raise ValueError("La catégorie est obligatoire")
+    try:
+        # Validation uniquement: on conserve l'expression pour l'édition.
+        _ = parse_price_to_float(price)
+    except ValueError as exc:
+        raise ValueError("Prix invalide") from exc
+
+    new_details = [name, date, price, category, description]
+    new_row = [expense_id, *new_details]
+
+    with csv_path.open(mode="r", encoding="utf-8", newline="") as file:
+        reader = csv.reader(file)
+        rows = [r for r in reader]
+
+    idx: int | None = None
+    for i, r in enumerate(rows):
+        if len(r) >= 1 and r[0] == expense_id:
+            idx = i
+            break
+    if idx is None:
+        raise ValueError("Dépense introuvable")
+
+    if not allow_duplicates:
+        for i, r in enumerate(rows):
+            if i == idx:
+                continue
+            if len(r) >= 6 and r[1:6] == new_details:
+                raise DuplicateExpenseError("Cette dépense existe déjà")
+
+    rows[idx] = new_row
+
+    with csv_path.open(mode="w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerows(rows)
+
+
+def delete_expense(csv_path: Path, *, expense_id: str) -> None:
+    """Supprime une dépense par son id."""
+
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise ValueError("Fichier de dépenses introuvable")
+
+    migrate_expense_ids(csv_path)
+
+    expense_id = (expense_id or "").strip()
+    if not expense_id:
+        raise ValueError("Id de dépense invalide")
+
+    with csv_path.open(mode="r", encoding="utf-8", newline="") as file:
+        reader = csv.reader(file)
+        rows = [r for r in reader]
+
+    kept: list[list[str]] = []
+    removed = False
+    for r in rows:
+        if len(r) >= 1 and r[0] == expense_id and not removed:
+            removed = True
+            continue
+        kept.append(r)
+
+    if not removed:
+        raise ValueError("Dépense introuvable")
+
+    with csv_path.open(mode="w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerows(kept)
+
+
+def migrate_expense_ids(csv_path: Path) -> None:
+    """Assure que chaque dépense possède un id en première colonne.
+
+    Migration auto depuis l'ancien format:
+      [name, date, price, category, description]
+    vers:
+      [id, name, date, price, category, description]
+    """
+
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        return
+
+    with csv_path.open(mode="r", encoding="utf-8", newline="") as file:
+        reader = csv.reader(file)
+        rows = [r for r in reader]
+
+    needs_write = False
+    seen_ids: set[str] = set()
+    new_rows: list[list[str]] = []
+
+    for row in rows:
+        if not row:
+            continue
+
+        # Déjà au nouveau format
+        if len(row) >= 6:
+            expense_id = (row[0] or "").strip()
+            if not expense_id or expense_id in seen_ids:
+                expense_id = uuid.uuid4().hex
+                needs_write = True
+            seen_ids.add(expense_id)
+            new_rows.append([expense_id, row[1], row[2], row[3], row[4], row[5]])
+            # Si la ligne avait plus de colonnes, on les ignore.
+            if len(row) != 6:
+                needs_write = True
+            continue
+
+        # Ancien format (5 colonnes)
+        if len(row) == 5:
+            expense_id = uuid.uuid4().hex
+            seen_ids.add(expense_id)
+            new_rows.append([expense_id, row[0], row[1], row[2], row[3], row[4]])
+            needs_write = True
+            continue
+
+        # Format inattendu: on tente de le garder mais en imposant 6 colonnes
+        expense_id = uuid.uuid4().hex
+        seen_ids.add(expense_id)
+        name = (row[0] if len(row) >= 1 else "")
+        date = (row[1] if len(row) >= 2 else "")
+        price = (row[2] if len(row) >= 3 else "")
+        category = (row[3] if len(row) >= 4 else "")
+        description = (row[4] if len(row) >= 5 else "")
+        new_rows.append([expense_id, name, date, price, category, description])
+        needs_write = True
+
+    if not needs_write:
+        return
+
+    with csv_path.open(mode="w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerows(new_rows)
