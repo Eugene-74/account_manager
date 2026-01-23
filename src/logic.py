@@ -6,7 +6,8 @@ import ast
 import uuid
 import os
 import shutil
-from datetime import date
+import re
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -182,6 +183,55 @@ def format_price(price: str) -> str:
     """Normalise un prix saisi en texte vers un affichage float."""
     val = parse_price_to_float(price)
     return f"{val:.2f}"
+
+
+def normalize_date_text(text: str) -> str:
+    """Normalise une date utilisateur vers dd/MM/yyyy.
+
+    Formats acceptés (exemples):
+    - 03/05/2025, 3/5/2025
+    - 03/05/25, 3/5/25
+    - 2025-05-03 (AAAA-MM-JJ)
+    - séparateurs '/', '-', '.', espaces
+
+    Hypothèse: si l'année est sur 2 chiffres, on utilise 2000-2099.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("La date est obligatoire")
+
+    parts = [p for p in re.split(r"[^0-9]+", raw) if p]
+    if len(parts) != 3:
+        raise ValueError(
+            "Date invalide. Exemples: 03/05/2025, 3/5/25, 2025-05-03"
+        )
+
+    a, b, c = parts
+    try:
+        if len(a) == 4:
+            year = int(a)
+            month = int(b)
+            day = int(c)
+        else:
+            day = int(a)
+            month = int(b)
+            year = int(c)
+    except ValueError as exc:
+        raise ValueError(
+            "Date invalide. Exemples: 03/05/2025, 3/5/25, 2025-05-03"
+        ) from exc
+
+    if 0 <= year < 100:
+        year = 2000 + year
+
+    try:
+        datetime(year, month, day)
+    except ValueError as exc:
+        raise ValueError(
+            "Date invalide. Exemples: 03/05/2025, 3/5/25, 2025-05-03"
+        ) from exc
+
+    return f"{day:02d}/{month:02d}/{year:04d}"
 
 
 def load_budgets(budgets_path: Path) -> dict[str, dict[str, dict[str, float]]]:
@@ -454,8 +504,10 @@ def add_expense(
 
     if not name:
         raise ValueError("Le nom est obligatoire")
-    if not date:
-        raise ValueError("La date est obligatoire")
+    try:
+        date = normalize_date_text(date)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     if not category:
         raise ValueError("La catégorie est obligatoire")
     try:
@@ -523,8 +575,10 @@ def update_expense(
 
     if not name:
         raise ValueError("Le nom est obligatoire")
-    if not date:
-        raise ValueError("La date est obligatoire")
+    try:
+        date = normalize_date_text(date)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     if not category:
         raise ValueError("La catégorie est obligatoire")
     try:
