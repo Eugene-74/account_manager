@@ -6,7 +6,7 @@
 !define APP_NAME "AccountManager"
 !define APP_PUBLISHER "Eugene-74"
 !define APP_EXE "AccountManager.exe"
-!define APP_VERSION "1.0.1"
+!define APP_VERSION "0.0.0"
 
 ; Paths are relative to this .nsi file (installer\...)
 !define PROJECT_ROOT ".."
@@ -45,10 +45,10 @@ Section "Install"
   ; Create a stable uninstaller filename in the install folder.
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 
-  ; Shortcuts
+  ; Shortcuts (use the executable's embedded icon)
   CreateDirectory "$SMPROGRAMS\\${APP_NAME}"
-  CreateShortcut "$SMPROGRAMS\\${APP_NAME}\\${APP_NAME}.lnk" "$INSTDIR\\${APP_EXE}" "" "$INSTDIR\\resources\\app.ico"
-  CreateShortcut "$DESKTOP\\${APP_NAME}.lnk" "$INSTDIR\\${APP_EXE}" "" "$INSTDIR\\resources\\app.ico"
+  CreateShortcut "$SMPROGRAMS\\${APP_NAME}\\${APP_NAME}.lnk" "$INSTDIR\\${APP_EXE}"
+  CreateShortcut "$DESKTOP\\${APP_NAME}.lnk" "$INSTDIR\\${APP_EXE}"
 
   ; Add/Remove Programs registration
   WriteRegStr HKLM "Software\\${APP_PUBLISHER}\\${APP_NAME}" "InstallDir" "$INSTDIR"
