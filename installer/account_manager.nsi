@@ -40,7 +40,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Copy the full PyInstaller dist folder.
-  File /r "..\dist\${APP_NAME}\*"
+  File /r "..\dist\*"
 
   ; Create a stable uninstaller filename in the install folder.
   WriteUninstaller "$INSTDIR\\uninstall.exe"

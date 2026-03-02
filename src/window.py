@@ -100,6 +100,10 @@ class ExpensesProxyModel(QtCore.QSortFilterProxyModel):
 		return super().lessThan(left, right)
 
 class AddExpenseDialog(QtWidgets.QDialog):
+	_last_name: str | None = None
+	_last_date: str | None = None
+	_last_category: str | None = None
+
 	def __init__(
 		self,
 		categories: list[str],
@@ -109,6 +113,7 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		initial: dict[str, str] | None = None,
 	):
 		super().__init__(parent)
+		self._is_edit = bool(initial)
 		self.setWindowTitle(title or tr("dlg.add.title"))
 		self.setModal(True)
 		self.resize(520, 240)
@@ -154,8 +159,7 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		buttons.rejected.connect(self.reject)
 		layout.addWidget(buttons)
 
-		self.name_edit.setFocus()
-
+		# Pré-remplir les champs en fonction du mode (ajout ou édition)
 		if initial:
 			self.name_edit.setText(initial.get("name", ""))
 			self.date_edit.setText(initial.get("date", ""))
@@ -166,6 +170,33 @@ class AddExpenseDialog(QtWidgets.QDialog):
 				idx = self.category_combo.findText(category, QtCore.Qt.MatchFlag.MatchFixedString)
 				if idx >= 0:
 					self.category_combo.setCurrentIndex(idx)
+		else:
+			# Nouvel ajout: se souvenir du dernier nom/date/catégorie si disponibles
+			if AddExpenseDialog._last_name:
+				self.name_edit.setText(AddExpenseDialog._last_name)
+			if AddExpenseDialog._last_date:
+				self.date_edit.setText(AddExpenseDialog._last_date)
+			else:
+				# Par défaut, date du jour
+				current = QtCore.QDate.currentDate()
+				self.date_edit.setText(current.toString("dd/MM/yyyy"))
+			if AddExpenseDialog._last_category:
+				idx = self.category_combo.findText(
+					AddExpenseDialog._last_category,
+					QtCore.Qt.MatchFlag.MatchFixedString,
+				)
+				if idx >= 0:
+					self.category_combo.setCurrentIndex(idx)
+
+		self.name_edit.setFocus()
+
+	def accept(self) -> None:
+		# En mode ajout, mémoriser nom/date/catégorie pour le prochain ajout.
+		if not self._is_edit:
+			AddExpenseDialog._last_name = self.name_edit.text().strip()
+			AddExpenseDialog._last_date = self.date_edit.text().strip()
+			AddExpenseDialog._last_category = self.category_combo.currentText().strip()
+		super().accept()
 
 	def get_values(self) -> dict[str, str]:
 		return {
@@ -588,6 +619,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self._default_year = current.year()
 		self._default_month = current.month()
 		self._month_names = self._get_month_names()
+		self._filters_initialized = False
 
 		self.reload()
 
@@ -1248,8 +1280,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		years.add(self._default_year)
 		sorted_years = sorted(years)
-		previous_year = self.year_combo.currentText() if self.year_combo.count() else ""
-		previous_month = self.month_combo.currentText() if self.month_combo.count() else ""
+		previous_year_data = self.year_combo.currentData() if self.year_combo.count() else None
+		previous_month_data = self.month_combo.currentData() if self.month_combo.count() else None
 
 		self.year_combo.blockSignals(True)
 		self.month_combo.blockSignals(True)
@@ -1263,20 +1295,45 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		for m in range(1, 13):
 			self.month_combo.addItem(f"{m:02d}", int(m))
 
-		# Défaut: année+mois actuels si disponibles, sinon restaurer la sélection.
-		if str(self._default_year) in [str(y) for y in sorted_years]:
-			# Choix par data
-			idx_year = self.year_combo.findData(int(self._default_year))
-			if idx_year >= 0:
-				self.year_combo.setCurrentIndex(idx_year)
-			idx_month = self.month_combo.findData(int(self._default_month))
-			if idx_month >= 0:
-				self.month_combo.setCurrentIndex(idx_month)
+		# Premier chargement: année/mois courants par défaut.
+		if not getattr(self, "_filters_initialized", False):
+			if str(self._default_year) in [str(y) for y in sorted_years]:
+				idx_year = self.year_combo.findData(int(self._default_year))
+				if idx_year >= 0:
+					self.year_combo.setCurrentIndex(idx_year)
+				idx_month = self.month_combo.findData(int(self._default_month))
+				if idx_month >= 0:
+					self.month_combo.setCurrentIndex(idx_month)
+			else:
+				# Si l'année courante n'existe pas encore dans les données, on reste sur "Tous".
+				self.year_combo.setCurrentIndex(0)
+				self.month_combo.setCurrentIndex(0)
+			self._filters_initialized = True
 		else:
-			if previous_year:
-				self.year_combo.setCurrentText(previous_year)
-			if previous_month:
-				self.month_combo.setCurrentText(previous_month)
+			# Ensuite: restaurer autant que possible l'année et le mois précédemment sélectionnés.
+			if previous_year_data is None:
+				# Filtre "Tous" auparavant
+				self.year_combo.setCurrentIndex(0)
+			else:
+				idx_year = self.year_combo.findData(previous_year_data)
+				if idx_year >= 0:
+					self.year_combo.setCurrentIndex(idx_year)
+				else:
+					# Sinon, tomber sur l'année par défaut si disponible
+					idx_def_year = self.year_combo.findData(int(self._default_year))
+					if idx_def_year >= 0:
+						self.year_combo.setCurrentIndex(idx_def_year)
+
+			if previous_month_data is None:
+				self.month_combo.setCurrentIndex(0)
+			else:
+				idx_month = self.month_combo.findData(previous_month_data)
+				if idx_month >= 0:
+					self.month_combo.setCurrentIndex(idx_month)
+				else:
+					idx_def_month = self.month_combo.findData(int(self._default_month))
+					if idx_def_month >= 0:
+						self.month_combo.setCurrentIndex(idx_def_month)
 
 		self.year_combo.blockSignals(False)
 		self.month_combo.blockSignals(False)
