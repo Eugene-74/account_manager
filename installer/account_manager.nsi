@@ -6,7 +6,7 @@
 !define APP_NAME "AccountManager"
 !define APP_PUBLISHER "Eugene-74"
 !define APP_EXE "AccountManager.exe"
-!define APP_VERSION "1.0.0"
+!define APP_VERSION "1.0.1"
 
 ; Paths are relative to this .nsi file (installer\...)
 !define PROJECT_ROOT ".."
