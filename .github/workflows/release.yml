@@ -89,7 +89,21 @@ jobs:
       - name: Build installer with NSIS
         shell: powershell
         run: |
-          makensis installer\account_manager.nsi
+          $makensis = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $makensis) {
+            $candidates = @(
+              "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+              "${env:ProgramFiles}\NSIS\makensis.exe"
+            )
+            $makensisPath = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $makensisPath) {
+              Write-Error "makensis not found in PATH or standard NSIS locations."
+            }
+          } else {
+            $makensisPath = $makensis.Source
+          }
+
+          & $makensisPath "installer\account_manager.nsi"
 
       - name: Verify installer exists
         shell: bash
