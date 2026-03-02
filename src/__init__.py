@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -33,6 +34,7 @@ def _detect_version() -> str:
 	Ordre de priorité:
 	- variable d'environnement ACCOUNT_MANAGER_TAG
 	- variables CI courantes (GITHUB_REF_NAME, GIT_TAG, APP_VERSION)
+	- dernier tag Git local (git describe) si disponible
 	- fichier resources/version.txt (s'il existe)
 	- valeur de secours "0.0.0"
 	"""
@@ -46,6 +48,22 @@ def _detect_version() -> str:
 		)
 	if tag:
 		return _extract_version_from_tag(tag)
+
+	# En dev: tenter de récupérer le dernier tag Git du dépôt.
+	try:
+		repo_root = Path(__file__).resolve().parents[1]
+		result = subprocess.run(
+			["git", "describe", "--tags", "--abbrev=0"],
+			cwd=str(repo_root),
+			stdout=subprocess.PIPE,
+			stderr=subprocess.DEVNULL,
+			text=True,
+			timeout=1.0,
+		)
+		if result.returncode == 0 and result.stdout.strip():
+			return _extract_version_from_tag(result.stdout)
+	except (OSError, subprocess.SubprocessError):
+		pass
 
 	# Option: fichier texte embarqué contenant le tag ou la version
 	try:
