@@ -56,7 +56,17 @@ jobs:
           if (-not $tag.StartsWith('v')) {
             Write-Error "Tag name must start with 'v', got '$tag'"
           }
-          $version = $tag.Substring(1)
+
+          # Accepte les tags de type v1.0.1 ou v1.0.1v4
+          # - v1.0.1     -> version 1.0.1
+          # - v1.0.1v4   -> version 1.0.1.4 (suffixe build converti en 4ème chiffre)
+            # Accepte les tags de type v1.0.1 ou v1.0.1v4
+            # On garde uniquement la partie 1.0.1 et on ignore tout ce qui suit
+            # - v1.0.1     -> version 1.0.1
+            # - v1.0.1v4   -> version 1.0.1
+            $withoutPrefix = $tag.Substring(1)  # enlève le premier 'v'
+            $version = $withoutPrefix.Split('v')[0]
+
           Write-Host "Using tag $tag with version $version"
 
           $path = 'installer/account_manager.nsi'
@@ -69,7 +79,7 @@ jobs:
           if ($content -notmatch $pattern) {
             Write-Error 'APP_VERSION define not found in NSIS script'
           }
-          $replacement = "!define APP_VERSION \"$version\""
+          $replacement = ('!define APP_VERSION "{0}"' -f $version)
           $newContent = [System.Text.RegularExpressions.Regex]::Replace($content, $pattern, $replacement)
           Set-Content -Path $path -Value $newContent -Encoding UTF8
 
