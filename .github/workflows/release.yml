@@ -38,8 +38,8 @@ jobs:
       - name: Verify built EXE exists
         shell: bash
         run: |
-          if [ ! -f "dist/AccountManager/AccountManager.exe" ]; then
-            echo "dist/AccountManager/AccountManager.exe not found" >&2
+          if [ ! -f "dist/AccountManager.exe" ]; then
+            echo "dist/AccountManager.exe not found" >&2
             exit 1
           fi
 
@@ -96,7 +96,7 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           body: Release ${{ steps.version.outputs.tag }}
           files: |
-            dist/AccountManager/AccountManager.exe
+            dist/AccountManager.exe
             installer/AccountManagerSetup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
