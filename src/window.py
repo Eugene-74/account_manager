@@ -8,12 +8,34 @@ from pathlib import Path
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from . import __version__ as APP_VERSION
 from . import logic
+from .github_update import (
+	GitHubUpdateError,
+	get_latest_version_from_github,
+	install_latest_version_from_github,
+)
 from .budget_dialog import BudgetDialog
 from .translate import LANGUAGE_OPTIONS, set_language, tr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _parse_version(value: str) -> tuple[int, ...]:
+	value = (value or "").strip()
+	if not value:
+		return (0,)
+	if value[0] in {"v", "V"}:
+		value = value[1:]
+	parts = value.split(".")
+	result: list[int] = []
+	for part in parts:
+		try:
+			result.append(int(part))
+		except ValueError:
+			break
+	return tuple(result) if result else (0,)
 
 
 @dataclass(frozen=True)
@@ -519,6 +541,9 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.budget_button.clicked.connect(self._on_budget_clicked)
 		header_layout.addWidget(self.budget_button)
 
+		# Vérification des mises à jour GitHub au démarrage (après création de la fenêtre)
+		QtCore.QTimer.singleShot(3000, self.check_for_updates)
+
 		self.reload_button = QtWidgets.QPushButton(tr("window.reload_label"))
 		self.reload_button.setToolTip(tr("tt.reload"))
 		self.reload_button.clicked.connect(self.reload)
@@ -622,6 +647,93 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self._filters_initialized = False
 
 		self.reload()
+
+	def check_for_updates(self) -> None:
+		"""Vérifie s'il existe une version plus récente sur GitHub.
+
+		Si une nouvelle version est disponible, propose à l'utilisateur de
+		l'installer, de l'ignorer (jusqu'à une version ultérieure), ou d'attendre.
+		"""
+
+		try:
+			settings = logic.load_app_settings(self._data_dir)
+		except Exception:
+			settings = {}
+
+		ignored_version = ""
+		if isinstance(settings, dict):
+			ignored_version = str(settings.get("ignored_update_version") or "")
+		else:
+			settings = {}
+
+		try:
+			latest_tag = get_latest_version_from_github("Eugene-74", "account_manager")
+		except GitHubUpdateError as exc:
+			QtWidgets.QMessageBox.information(
+				self,
+				"Mise à jour",
+				"Impossible de vérifier les mises à jour.\n\n" f"{exc}",
+			)
+			return
+
+		if ignored_version and latest_tag == ignored_version:
+			return
+
+		current_tuple = _parse_version(APP_VERSION)
+		latest_tuple = _parse_version(latest_tag)
+		print("current version : ",current_tuple)
+		print("latest version : ",latest_tuple)
+
+		if not latest_tuple or latest_tuple <= current_tuple:
+			return
+
+		msg = QtWidgets.QMessageBox(self)
+		msg.setIcon(QtWidgets.QMessageBox.Icon.Information)
+		msg.setWindowTitle("Mise à jour disponible")
+		msg.setText(
+			"Une nouvelle version "
+			f"{latest_tag} est disponible.\n"
+			f"Version actuelle : {APP_VERSION}.\n\n"
+			"Voulez-vous l'installer maintenant ?"
+		)
+
+		install_button = msg.addButton(
+			"Installer", QtWidgets.QMessageBox.ButtonRole.AcceptRole
+		)
+		ignore_button = msg.addButton(
+			"Ignorer cette version",
+			QtWidgets.QMessageBox.ButtonRole.DestructiveRole,
+		)
+		later_button = msg.addButton(
+			"Plus tard", QtWidgets.QMessageBox.ButtonRole.RejectRole
+		)
+
+		msg.exec()
+		clicked = msg.clickedButton()
+
+		if clicked is install_button:
+			try:
+				install_latest_version_from_github(
+					"Eugene-74",
+					"account_manager",
+					asset_name_substring="AccountManagerSetup",
+				)
+			except GitHubUpdateError as exc:
+				QtWidgets.QMessageBox.warning(
+					self,
+					"Mise à jour",
+					"Échec du téléchargement ou du lancement de la mise à jour.\n\n"
+					f"{exc}",
+				)
+		elif clicked is ignore_button:
+			settings["ignored_update_version"] = latest_tag
+			try:
+				logic.save_app_settings(self._data_dir, settings)
+			except Exception:
+				pass
+		else:
+			# "Plus tard" -> ne rien mémoriser
+			pass
 
 	def _on_language_changed(self) -> None:
 		lang = str(self.language_combo.currentData() or "fr").strip().lower() or "fr"
