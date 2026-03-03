@@ -1,11 +1,39 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+import sys
+
+
+# S'assurer que le dossier du projet est dans sys.path pour pouvoir importer le package.
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+try:
+    import src as account_manager  # src/__init__.py fournit __version__
+    APP_VERSION = getattr(account_manager, "__version__", "0.0.0") or "0.0.0"
+except Exception:
+    APP_VERSION = "0.0.0"
+
+
+# Génère resources/version.txt pour que l'app packagée connaisse sa version.
+version_file = PROJECT_ROOT / "resources" / "version.txt"
+try:
+    version_file.write_text(str(APP_VERSION), encoding="utf-8")
+except OSError:
+    # En cas d'échec, l'app retombera sur 0.0.0.
+    pass
+
 
 a = Analysis(
     ['run_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('resources\\app.ico', 'resources')],
+    datas=[
+        ('resources\\app.ico', 'resources'),
+        ('resources\\version.txt', 'resources'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
