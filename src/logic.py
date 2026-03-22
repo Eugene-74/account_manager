@@ -98,6 +98,35 @@ def set_language_setting(data_dir: Path, lang: str) -> None:
     save_app_settings(data_dir, settings)
 
 
+def get_save_dir_setting(data_dir: Path) -> Path | None:
+    settings = load_app_settings(data_dir)
+    raw = settings.get("save_data_dir")
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return Path(value)
+    except Exception:
+        return None
+
+
+def set_save_dir_setting(data_dir: Path, save_dir: Path | str | None) -> None:
+    settings = load_app_settings(data_dir)
+    if save_dir is None:
+        settings.pop("save_data_dir", None)
+        save_app_settings(data_dir, settings)
+        return
+
+    value = str(save_dir).strip()
+    if not value:
+        settings.pop("save_data_dir", None)
+    else:
+        settings["save_data_dir"] = value
+    save_app_settings(data_dir, settings)
+
+
 def backup_expenses_daily(csv_path: Path) -> Path | None:
     """Sauvegarde une copie quotidienne de expenses.csv.
 

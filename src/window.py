@@ -453,22 +453,18 @@ def read_expenses(csv_path: Path) -> list[Expense]:
 class ExpensesWindow(QtWidgets.QMainWindow):
 	def __init__(self, data_dir: Path):
 		super().__init__()
-		self._data_dir = Path(data_dir)
-		self._data_dir.mkdir(parents=True, exist_ok=True)
+		self._settings_dir = Path(data_dir)
+		self._settings_dir.mkdir(parents=True, exist_ok=True)
+
+		saved_data_dir = logic.get_save_dir_setting(self._settings_dir)
+		active_data_dir = saved_data_dir if saved_data_dir is not None else self._settings_dir
 
 		# Langue (persistée dans settings.json)
-		lang = logic.get_language_setting(self._data_dir, default="fr")
+		lang = logic.get_language_setting(self._settings_dir, default="fr")
 		set_language(lang)
 		self._current_language = lang
 
-		self._csv_path = self._data_dir / "expenses.csv"
-		self._options_path = self._data_dir / "qt_options.json"
-		self._budgets_path = self._data_dir / "budgets.json"
-		self._categories, self._category_colors = logic.load_category_options(
-			self._options_path
-		)
-		self._categories = sorted(self._categories, key=str.casefold)
-		self._budgets = logic.load_budgets(self._budgets_path)
+		self._apply_data_dir(active_data_dir)
 
 		self.setWindowTitle(tr("window.title"))
 		self.resize(1000, 650)
@@ -615,6 +611,11 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.status = QtWidgets.QStatusBar()
 		self.setStatusBar(self.status)
 
+		self.save_dir_button = QtWidgets.QPushButton(tr("window.save_dir_label"))
+		self.save_dir_button.setToolTip(tr("tt.save_dir"))
+		self.save_dir_button.clicked.connect(self._on_change_save_dir_clicked)
+		self.status.addPermanentWidget(self.save_dir_button)
+
 		self._source_model = QtGui.QStandardItemModel(0, 6, self)
 		self._source_model.setHorizontalHeaderLabels(
 			[
@@ -656,7 +657,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		"""
 
 		try:
-			settings = logic.load_app_settings(self._data_dir)
+			settings = logic.load_app_settings(self._settings_dir)
 		except Exception:
 			settings = {}
 
@@ -728,7 +729,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		elif clicked is ignore_button:
 			settings["ignored_update_version"] = latest_tag
 			try:
-				logic.save_app_settings(self._data_dir, settings)
+				logic.save_app_settings(self._settings_dir, settings)
 			except Exception:
 				pass
 		else:
@@ -738,7 +739,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 	def _on_language_changed(self) -> None:
 		lang = str(self.language_combo.currentData() or "fr").strip().lower() or "fr"
 		self._current_language = lang
-		logic.set_language_setting(self._data_dir, lang)
+		logic.set_language_setting(self._settings_dir, lang)
 		set_language(lang)
 		self._retranslate_ui()
 		# Recharger pour rafraîchir les libellés dynamiques (ex: "Tous")
@@ -765,6 +766,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self.reload_button.setToolTip(tr("tt.reload"))
 		self.restore_button.setText(tr("window.restore_label"))
 		self.restore_button.setToolTip(tr("tt.restore"))
+		self.save_dir_button.setText(tr("window.save_dir_label"))
+		self.save_dir_button.setToolTip(tr("tt.save_dir"))
 		self.table.setToolTip(tr("tt.table"))
 		self.pivot_group.setTitle(tr("window.totals_group"))
 
@@ -789,6 +792,56 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 	def _get_month_names(self) -> list[str]:
 		return [tr(f"month.{i:02d}") for i in range(1, 13)]
+
+	def _apply_data_dir(self, data_dir: Path) -> None:
+		self._data_dir = Path(data_dir)
+		self._data_dir.mkdir(parents=True, exist_ok=True)
+		self._csv_path = self._data_dir / "expenses.csv"
+		self._options_path = self._data_dir / "qt_options.json"
+		self._budgets_path = self._data_dir / "budgets.json"
+		self._categories, self._category_colors = logic.load_category_options(
+			self._options_path
+		)
+		self._categories = sorted(self._categories, key=str.casefold)
+		self._budgets = logic.load_budgets(self._budgets_path)
+		if hasattr(self, "path_label"):
+			self.path_label.setText(str(self._csv_path))
+
+	def _on_change_save_dir_clicked(self) -> None:
+		selected_dir = QtWidgets.QFileDialog.getExistingDirectory(
+			self,
+			tr("window.save_dir_title"),
+			str(self._data_dir),
+		)
+		if not selected_dir:
+			return
+
+		new_dir = Path(selected_dir)
+		try:
+			new_dir.mkdir(parents=True, exist_ok=True)
+		except OSError as exc:
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
+			return
+
+		try:
+			same_dir = new_dir.resolve() == self._data_dir.resolve()
+		except OSError:
+			same_dir = str(new_dir) == str(self._data_dir)
+		if same_dir:
+			return
+
+		current_csv = self._csv_path
+		target_csv = new_dir / "expenses.csv"
+		if not target_csv.exists() and current_csv.exists() and current_csv.is_file():
+			try:
+				shutil.copy2(current_csv, target_csv)
+			except OSError as exc:
+				QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
+				return
+
+		self._apply_data_dir(new_dir)
+		logic.set_save_dir_setting(self._settings_dir, new_dir)
+		self.reload()
 
 	def _selected_year_or_current(self) -> int:
 		year_data = self.year_combo.currentData() if self.year_combo.count() else None

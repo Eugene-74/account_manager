@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
+import importlib.metadata
 import re
-import subprocess
+import tomllib
 from pathlib import Path
 
 
@@ -13,11 +13,10 @@ def _extract_version_from_tag(tag: str) -> str:
 	tag = (tag or "").strip()
 	if not tag:
 		return "0.0.0"
-	# Ex: "refs/tags/v1.0.0v12" -> "v1.0.0v12"
+	# Ex: "refs/tags/v1.0.0" -> "v1.0.0"
 	if "/" in tag:
 		tag = tag.split("/")[-1]
 	# On garde la partie majeure.mineure.corrective en priorité.
-	# Ex: "v1.0.0v12" -> "v1.0.0"
 	match = re.match(r"^(v?\d+\.\d+\.\d+)", tag)
 	if match:
 		return match.group(1)
@@ -28,42 +27,49 @@ def _extract_version_from_tag(tag: str) -> str:
 	return tag
 
 
+def _read_version_from_pyproject() -> str | None:
+	try:
+		repo_root = Path(__file__).resolve().parents[1]
+		pyproject_path = repo_root / "pyproject.toml"
+		if not pyproject_path.is_file():
+			return None
+
+		data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+		project = data.get("project")
+		if not isinstance(project, dict):
+			return None
+		version = project.get("version")
+		if not isinstance(version, str):
+			return None
+
+		clean = version.strip()
+		return clean or None
+	except Exception:
+		return None
+
+
 def _detect_version() -> str:
-	"""Détermine automatiquement __version__ à partir d'un tag ou d'un fichier.
+	"""Détermine automatiquement __version__ depuis pyproject.toml.
 
 	Ordre de priorité:
-	- variable d'environnement ACCOUNT_MANAGER_TAG
-	- variables CI courantes (GITHUB_REF_NAME, GIT_TAG, APP_VERSION)
-	- dernier tag Git local (git describe) si disponible
+	- métadonnées installées du package (issues du pyproject)
+	- pyproject.toml (source du dépôt)
 	- fichier resources/version.txt (s'il existe)
 	- valeur de secours "0.0.0"
 	"""
 
-	tag = os.getenv("ACCOUNT_MANAGER_TAG")
-	if not tag:
-		tag = (
-			os.getenv("GITHUB_REF_NAME")
-			or os.getenv("GIT_TAG")
-			or os.getenv("APP_VERSION")
-		)
-	if tag:
-		return _extract_version_from_tag(tag)
-
-	# En dev: tenter de récupérer le dernier tag Git du dépôt.
 	try:
-		repo_root = Path(__file__).resolve().parents[1]
-		result = subprocess.run(
-			["git", "describe", "--tags", "--abbrev=0"],
-			cwd=str(repo_root),
-			stdout=subprocess.PIPE,
-			stderr=subprocess.DEVNULL,
-			text=True,
-			timeout=1.0,
-		)
-		if result.returncode == 0 and result.stdout.strip():
-			return _extract_version_from_tag(result.stdout)
-	except (OSError, subprocess.SubprocessError):
+		installed = importlib.metadata.version("account-manager")
+		if installed and installed.strip():
+			return _extract_version_from_tag(installed)
+	except importlib.metadata.PackageNotFoundError:
 		pass
+	except Exception:
+		pass
+
+	pyproject_version = _read_version_from_pyproject()
+	if pyproject_version:
+		return _extract_version_from_tag(pyproject_version)
 
 	# Option: fichier texte embarqué contenant le tag ou la version
 	try:

@@ -10,7 +10,11 @@
 ; Peut être surchargé via la ligne de commande NSIS, par ex. :
 ;   makensis /DAPP_VERSION=1.2.3 installer\\account_manager.nsi
 !ifndef APP_VERSION
+; Par défaut, on lit la version dans pyproject.toml.
+!searchparse /noerrors /file "..\pyproject.toml" 'version = "' APP_VERSION '"'
+!ifndef APP_VERSION
 !define APP_VERSION "0.0.0"
+!endif
 !endif
 
 ; Paths are relative to this .nsi file (installer\...)

@@ -16,6 +16,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "window.restore_missing": "Fichier introuvable",
         "window.restore_label": "Récupérer…",
         "window.reload_label": "Recharger",
+        "window.save_dir_title": "Choisir le dossier de sauvegarde",
+        "window.save_dir_label": "dossier de sauvegarde",
         "window.add_label": "Ajouter",
         "window.delete_label": "Supprimer",
         "window.categories_label": "Catégories",
@@ -88,6 +90,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tt.budget": "Définir/éditer les budgets mensuels.",
         "tt.reload": "Recharger depuis le fichier expenses.csv.",
         "tt.restore": "Restaurer expenses.csv depuis une sauvegarde.",
+        "tt.save_dir": "Choisir le dossier qui contient expenses.csv.",
         "tt.language": "Choisir la langue de l'interface.",
         "tt.table": "Double-clic: modifier. Clic droit: menu.",
         # Add/Edit expense dialog
@@ -145,6 +148,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "window.restore_missing": "File not found",
         "window.restore_label": "Restore…",
         "window.reload_label": "Reload",
+        "window.save_dir_title": "Choose save directory",
+        "window.save_dir_label": "save directory",
         "window.add_label": "Add",
         "window.delete_label": "Delete",
         "window.categories_label": "Categories",
@@ -217,6 +222,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tt.budget": "Define/edit monthly budgets.",
         "tt.reload": "Reload from expenses.csv.",
         "tt.restore": "Restore expenses.csv from a backup.",
+        "tt.save_dir": "Choose the folder that contains expenses.csv.",
         "tt.language": "Choose UI language.",
         "tt.table": "Double-click: edit. Right-click: menu.",
         # Add/Edit expense dialog
