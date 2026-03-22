@@ -5,7 +5,9 @@ import sys
 
 
 # S'assurer que le dossier du projet est dans sys.path pour pouvoir importer le package.
-PROJECT_ROOT = Path(__file__).resolve().parent
+# En CI avec certaines versions de PyInstaller, __file__ peut ne pas exister.
+_spec_path = globals().get("__file__") or globals().get("SPEC") or "AccountManager.spec"
+PROJECT_ROOT = Path(_spec_path).resolve().parent if str(_spec_path).strip() else Path.cwd()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
