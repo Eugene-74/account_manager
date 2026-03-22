@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import re
 import shutil
 from datetime import datetime
 from dataclasses import dataclass
@@ -30,16 +31,10 @@ def _parse_version(value: str) -> tuple[int, ...]:
 	value = (value or "").strip()
 	if not value:
 		return (0,)
-	if value[0] in {"v", "V"}:
-		value = value[1:]
-	parts = value.split(".")
-	result: list[int] = []
-	for part in parts:
-		try:
-			result.append(int(part))
-		except ValueError:
-			break
-	return tuple(result) if result else (0,)
+	parts = re.findall(r"\d+", value)
+	if not parts:
+		return (0,)
+	return tuple(int(part) for part in parts[:3])
 
 
 @dataclass(frozen=True)
