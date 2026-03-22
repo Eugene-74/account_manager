@@ -127,6 +127,24 @@ def set_save_dir_setting(data_dir: Path, save_dir: Path | str | None) -> None:
     save_app_settings(data_dir, settings)
 
 
+def get_debug_logging_setting(data_dir: Path, *, default: bool = False) -> bool:
+    settings = load_app_settings(data_dir)
+    raw = settings.get("debug_logging")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def set_debug_logging_setting(data_dir: Path, enabled: bool) -> None:
+    settings = load_app_settings(data_dir)
+    settings["debug_logging"] = bool(enabled)
+    save_app_settings(data_dir, settings)
+
+
 def backup_expenses_daily(csv_path: Path) -> Path | None:
     """Sauvegarde une copie quotidienne de expenses.csv.
 

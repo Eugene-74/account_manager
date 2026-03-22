@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import logging
+import os
 import shutil
 from datetime import datetime
 from dataclasses import dataclass
@@ -15,11 +17,13 @@ from .github_update import (
 	get_latest_version_from_github,
 	install_latest_version_from_github,
 )
+from .app_logging import setup_logging
 from .budget_dialog import BudgetDialog
 from .translate import LANGUAGE_OPTIONS, set_language, tr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOGGER = logging.getLogger(__name__)
 
 
 def _parse_version(value: str) -> tuple[int, ...]:
@@ -670,6 +674,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		try:
 			latest_tag = get_latest_version_from_github("Eugene-74", "account_manager")
 		except GitHubUpdateError as exc:
+			LOGGER.warning("Echec verification mise a jour: %s", exc)
 			QtWidgets.QMessageBox.information(
 				self,
 				"Mise à jour",
@@ -682,8 +687,11 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		current_tuple = _parse_version(APP_VERSION)
 		latest_tuple = _parse_version(latest_tag)
-		print("current version : ",current_tuple)
-		print("latest version : ",latest_tuple)
+		LOGGER.info(
+			"Verification mise a jour: current=%s latest=%s",
+			current_tuple,
+			latest_tuple,
+		)
 
 		if not latest_tuple or latest_tuple <= current_tuple:
 			return
@@ -719,7 +727,9 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 					"account_manager",
 					asset_name_substring="AccountManagerSetup",
 				)
+				LOGGER.info("Installation mise a jour declenchee pour %s", latest_tag)
 			except GitHubUpdateError as exc:
+				LOGGER.error("Echec installation mise a jour %s: %s", latest_tag, exc)
 				QtWidgets.QMessageBox.warning(
 					self,
 					"Mise à jour",
@@ -727,10 +737,12 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 					f"{exc}",
 				)
 		elif clicked is ignore_button:
+			LOGGER.info("Version ignoree par utilisateur: %s", latest_tag)
 			settings["ignored_update_version"] = latest_tag
 			try:
 				logic.save_app_settings(self._settings_dir, settings)
 			except Exception:
+				LOGGER.exception("Impossible de sauvegarder ignored_update_version")
 				pass
 		else:
 			# "Plus tard" -> ne rien mémoriser
@@ -806,6 +818,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self._budgets = logic.load_budgets(self._budgets_path)
 		if hasattr(self, "path_label"):
 			self.path_label.setText(str(self._csv_path))
+		LOGGER.info("Dossier de donnees actif: %s", self._data_dir)
 
 	def _on_change_save_dir_clicked(self) -> None:
 		selected_dir = QtWidgets.QFileDialog.getExistingDirectory(
@@ -814,12 +827,14 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			str(self._data_dir),
 		)
 		if not selected_dir:
+			LOGGER.info("Changement dossier annule par utilisateur")
 			return
 
 		new_dir = Path(selected_dir)
 		try:
 			new_dir.mkdir(parents=True, exist_ok=True)
 		except OSError as exc:
+			LOGGER.error("Impossible de creer dossier %s: %s", new_dir, exc)
 			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 
@@ -828,6 +843,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		except OSError:
 			same_dir = str(new_dir) == str(self._data_dir)
 		if same_dir:
+			LOGGER.info("Dossier de donnees deja actif: %s", new_dir)
 			return
 
 		current_csv = self._csv_path
@@ -835,12 +851,25 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		if not target_csv.exists() and current_csv.exists() and current_csv.is_file():
 			try:
 				shutil.copy2(current_csv, target_csv)
+				LOGGER.info("Copie save vers nouveau dossier: %s -> %s", current_csv, target_csv)
 			except OSError as exc:
+				LOGGER.error("Echec copie save vers %s: %s", target_csv, exc)
 				QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 				return
 
-		self._apply_data_dir(new_dir)
-		logic.set_save_dir_setting(self._settings_dir, new_dir)
+		old_dir = self._data_dir
+		try:
+			logic.set_save_dir_setting(self._settings_dir, new_dir)
+			self._apply_data_dir(new_dir)
+		except Exception as exc:
+			LOGGER.exception("Impossible de changer le dossier de donnees vers %s", new_dir)
+			try:
+				logic.set_save_dir_setting(self._settings_dir, old_dir)
+			except Exception:
+				LOGGER.exception("Impossible de restaurer le setting de dossier apres echec")
+			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
+			return
+		LOGGER.info("Dossier de donnees change: %s", new_dir)
 		self.reload()
 
 	def _selected_year_or_current(self) -> int:
@@ -1426,16 +1455,19 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self.status.showMessage(tr("status.total", total=total_rows))
 
 	def reload(self) -> None:
+		LOGGER.debug("Reload start csv_path=%s", self._csv_path)
 		self._source_model.removeRows(0, self._source_model.rowCount())
 		# Migration automatique: ajoute un id unique à chaque ligne si nécessaire.
 		try:
 			logic.migrate_expense_ids(self._csv_path)
 		except Exception as exc:
+			LOGGER.exception("Echec migration IDs sur %s", self._csv_path)
 			QtWidgets.QMessageBox.warning(self, tr("dialog.error"), str(exc))
 			return
 
 		expenses = read_expenses(self._csv_path)
 		self._expenses_cache = list(expenses)
+		LOGGER.debug("Reload read_expenses count=%d", len(expenses))
 		# Mettre à jour les filtres année/mois à partir des dates existantes
 		years: set[int] = set()
 		for exp in expenses:
@@ -1445,6 +1477,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		years.add(self._default_year)
 		sorted_years = sorted(years)
+		LOGGER.debug("Reload years available=%s", sorted_years)
 		previous_year_data = self.year_combo.currentData() if self.year_combo.count() else None
 		previous_month_data = self.month_combo.currentData() if self.month_combo.count() else None
 
@@ -1542,6 +1575,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 
 		self._update_status()
 		self._update_pivot_totals()
+		LOGGER.info("Reload termine: %s depenses depuis %s", len(expenses), self._csv_path)
 
 
 def main() -> None:
@@ -1550,6 +1584,21 @@ def main() -> None:
 
 	# Migration auto depuis l'ancien dossier du projet (saveCompte) vers LocalAppData.
 	data_dir = logic.migrate_legacy_project_data(PROJECT_ROOT / "saveCompte")
+	settings = logic.load_app_settings(data_dir)
+	if "debug_logging" not in settings:
+		settings["debug_logging"] = False
+		try:
+			logic.save_app_settings(data_dir, settings)
+		except Exception:
+			pass
+	debug_logs = logic.get_debug_logging_setting(data_dir, default=False)
+	debug_env = (os.getenv("ACCOUNT_MANAGER_DEBUG") or "").strip().lower()
+	if debug_env in {"1", "true", "yes", "on"}:
+		debug_logs = True
+	log_path = setup_logging(data_dir, debug=debug_logs)
+	LOGGER.info("Application demarree version=%s", APP_VERSION)
+	LOGGER.info("Fichier de log: %s", log_path)
+	LOGGER.info("Debug logging: %s", debug_logs)
 
 	icon_path = PROJECT_ROOT / "resources" / "app.ico"
 	try:
