@@ -4,7 +4,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
@@ -80,6 +80,7 @@ def install_latest_version_from_github(
     asset_name_substring: Optional[str] = None,
     download_dir: Optional[str] = None,
     launch_installer: bool = True,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> str:
     """Download (and optionally launch) the latest installer from GitHub releases.
 
@@ -98,6 +99,11 @@ def install_latest_version_from_github(
     launch_installer: bool
         If True and running on Windows, the downloaded file is opened with the
         default handler (typically starting the installer).
+    progress_callback: Optional[Callable[[int, int, str], None]]
+        Optional callback called during download with:
+        - downloaded bytes
+        - total bytes (0 if unknown)
+        - asset name
 
     Returns
     -------
@@ -144,10 +150,23 @@ def install_latest_version_from_github(
                 raise GitHubUpdateError(
                     f"Failed to download asset, HTTP status {response.status}"
                 )
+            total_size = 0
+            try:
+                total_size = int(response.headers.get("Content-Length", "0") or "0")
+            except (TypeError, ValueError):
+                total_size = 0
+
+            downloaded = 0
+            if progress_callback is not None:
+                progress_callback(downloaded, total_size, name)
+
             with open(target_path, "wb") as fh:
                 chunk = response.read(8192)
                 while chunk:
                     fh.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback is not None:
+                        progress_callback(downloaded, total_size, name)
                     chunk = response.read(8192)
     except urllib.error.HTTPError as exc:  # pragma: no cover - network dependent
         raise GitHubUpdateError(f"HTTP error while downloading asset: {exc}") from exc
@@ -156,10 +175,16 @@ def install_latest_version_from_github(
     except OSError as exc:
         raise GitHubUpdateError(f"OS error while downloading asset: {exc}") from exc
 
-    if launch_installer and sys.platform.startswith("win"):
-        try:
-            os.startfile(target_path)  # type: ignore[attr-defined]
-        except OSError as exc:
-            raise GitHubUpdateError(f"Failed to launch installer: {exc}") from exc
+    if launch_installer:
+        launch_downloaded_installer(target_path)
 
     return target_path
+
+
+def launch_downloaded_installer(target_path: str) -> None:
+    if not sys.platform.startswith("win"):
+        raise GitHubUpdateError("Installer launch is currently supported only on Windows")
+    try:
+        os.startfile(target_path)  # type: ignore[attr-defined]
+    except OSError as exc:
+        raise GitHubUpdateError(f"Failed to launch installer: {exc}") from exc

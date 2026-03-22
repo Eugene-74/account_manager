@@ -17,6 +17,7 @@ from .github_update import (
 	GitHubUpdateError,
 	get_latest_version_from_github,
 	install_latest_version_from_github,
+	launch_downloaded_installer,
 )
 from .app_logging import setup_logging
 from .budget_dialog import BudgetDialog
@@ -45,6 +46,37 @@ class Expense:
 	price: str
 	category: str
 	description: str
+
+
+class UpdateDownloadWorker(QtCore.QObject):
+	progress = QtCore.pyqtSignal(int, int, str)
+	finished = QtCore.pyqtSignal(str)
+	error = QtCore.pyqtSignal(str)
+
+	def __init__(self, owner: str, repo: str, asset_name_substring: str | None):
+		super().__init__()
+		self.owner = owner
+		self.repo = repo
+		self.asset_name_substring = asset_name_substring
+
+	@QtCore.pyqtSlot()
+	def run(self) -> None:
+		try:
+			path = install_latest_version_from_github(
+				self.owner,
+				self.repo,
+				asset_name_substring=self.asset_name_substring,
+				launch_installer=False,
+				progress_callback=lambda downloaded, total, name: self.progress.emit(
+					downloaded,
+					total,
+					name,
+				),
+			)
+		except GitHubUpdateError as exc:
+			self.error.emit(str(exc))
+			return
+		self.finished.emit(path)
 
 
 class ExpensesProxyModel(QtCore.QSortFilterProxyModel):
@@ -645,6 +677,10 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self._default_month = current.month()
 		self._month_names = self._get_month_names()
 		self._filters_initialized = False
+		self._update_thread: QtCore.QThread | None = None
+		self._update_worker: UpdateDownloadWorker | None = None
+		self._update_progress_dialog: QtWidgets.QProgressDialog | None = None
+		self._pending_installer_path: str | None = None
 
 		self.reload()
 
@@ -716,21 +752,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		clicked = msg.clickedButton()
 
 		if clicked is install_button:
-			try:
-				install_latest_version_from_github(
-					"Eugene-74",
-					"account_manager",
-					asset_name_substring="AccountManagerSetup",
-				)
-				LOGGER.info("Installation mise a jour declenchee pour %s", latest_tag)
-			except GitHubUpdateError as exc:
-				LOGGER.error("Echec installation mise a jour %s: %s", latest_tag, exc)
-				QtWidgets.QMessageBox.warning(
-					self,
-					"Mise à jour",
-					"Échec du téléchargement ou du lancement de la mise à jour.\n\n"
-					f"{exc}",
-				)
+			self._start_update_download(latest_tag)
 		elif clicked is ignore_button:
 			LOGGER.info("Version ignoree par utilisateur: %s", latest_tag)
 			settings["ignored_update_version"] = latest_tag
@@ -742,6 +764,108 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		else:
 			# "Plus tard" -> ne rien mémoriser
 			pass
+
+	def _start_update_download(self, latest_tag: str) -> None:
+		if self._update_thread is not None:
+			return
+
+		LOGGER.info("Demarrage telechargement mise a jour %s", latest_tag)
+		self._update_progress_dialog = QtWidgets.QProgressDialog(
+			"Préparation du téléchargement…",
+			"",
+			0,
+			0,
+			self,
+		)
+		self._update_progress_dialog.setWindowTitle("Mise à jour")
+		self._update_progress_dialog.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+		self._update_progress_dialog.setAutoClose(False)
+		self._update_progress_dialog.setAutoReset(False)
+		self._update_progress_dialog.setMinimumDuration(0)
+		self._update_progress_dialog.setCancelButton(None)
+		self._update_progress_dialog.show()
+
+		self._update_thread = QtCore.QThread(self)
+		self._update_worker = UpdateDownloadWorker(
+			"Eugene-74",
+			"account_manager",
+			"AccountManagerSetup",
+		)
+		self._update_worker.moveToThread(self._update_thread)
+
+		self._update_thread.started.connect(self._update_worker.run)
+		self._update_worker.progress.connect(self._on_update_download_progress)
+		self._update_worker.finished.connect(self._on_update_download_finished)
+		self._update_worker.error.connect(self._on_update_download_error)
+
+		self._update_worker.finished.connect(self._update_thread.quit)
+		self._update_worker.error.connect(self._update_thread.quit)
+		self._update_thread.finished.connect(self._cleanup_update_worker)
+
+		self._update_thread.start()
+
+	def _on_update_download_progress(self, downloaded: int, total: int, asset_name: str) -> None:
+		if self._update_progress_dialog is None:
+			return
+
+		if total > 0:
+			percent = int((downloaded / total) * 100)
+			if self._update_progress_dialog.maximum() != 100:
+				self._update_progress_dialog.setRange(0, 100)
+			self._update_progress_dialog.setValue(max(0, min(100, percent)))
+			self._update_progress_dialog.setLabelText(
+				f"Téléchargement de {asset_name}… {percent}%"
+			)
+		else:
+			if self._update_progress_dialog.maximum() != 0:
+				self._update_progress_dialog.setRange(0, 0)
+			self._update_progress_dialog.setLabelText(
+				f"Téléchargement de {asset_name}…"
+			)
+
+	def _on_update_download_finished(self, installer_path: str) -> None:
+		LOGGER.info("Mise a jour telechargee: %s", installer_path)
+		if self._update_progress_dialog is not None:
+			self._update_progress_dialog.close()
+			self._update_progress_dialog.deleteLater()
+			self._update_progress_dialog = None
+
+		self._pending_installer_path = installer_path
+		app = QtWidgets.QApplication.instance()
+		if app is None:
+			return
+
+		app.aboutToQuit.connect(self._launch_pending_installer)
+		QtCore.QTimer.singleShot(0, app.quit)
+
+	def _on_update_download_error(self, message: str) -> None:
+		LOGGER.error("Echec telechargement mise a jour: %s", message)
+		if self._update_progress_dialog is not None:
+			self._update_progress_dialog.close()
+			self._update_progress_dialog.deleteLater()
+			self._update_progress_dialog = None
+		QtWidgets.QMessageBox.warning(
+			self,
+			"Mise à jour",
+			"Échec du téléchargement de la mise à jour.\n\n" f"{message}",
+		)
+
+	def _cleanup_update_worker(self) -> None:
+		if self._update_worker is not None:
+			self._update_worker.deleteLater()
+			self._update_worker = None
+		if self._update_thread is not None:
+			self._update_thread.deleteLater()
+			self._update_thread = None
+
+	def _launch_pending_installer(self) -> None:
+		if not self._pending_installer_path:
+			return
+		try:
+			launch_downloaded_installer(self._pending_installer_path)
+			LOGGER.info("Installateur lance: %s", self._pending_installer_path)
+		except GitHubUpdateError as exc:
+			LOGGER.error("Echec lancement installateur %s: %s", self._pending_installer_path, exc)
 
 	def _on_language_changed(self) -> None:
 		lang = str(self.language_combo.currentData() or "fr").strip().lower() or "fr"
