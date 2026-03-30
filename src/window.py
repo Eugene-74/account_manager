@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shutil
+from collections import Counter
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,36 @@ class UpdateDownloadWorker(QtCore.QObject):
 			self.error.emit(str(exc))
 			return
 		self.finished.emit(path)
+
+
+class ToastLabel(QtWidgets.QLabel):
+	def __init__(self, parent: QtWidgets.QWidget):
+		super().__init__(parent)
+		self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+		self.setAlignment(
+			QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+		)
+		self.setWordWrap(True)
+		self.setContentsMargins(10, 8, 10, 8)
+		self.setStyleSheet(
+			"QLabel {"
+			"background-color: rgba(35, 35, 35, 230);"
+			"color: white;"
+			"border: 1px solid rgba(255, 255, 255, 35);"
+			"border-radius: 8px;"
+			"padding: 6px 10px;"
+			"}"
+		)
+		self.hide()
+
+	def show_toast(self, text: str, timeout_ms: int = 2400) -> None:
+		if not text:
+			return
+		self.setText(text)
+		self.adjustSize()
+		self.show()
+		self.raise_()
+		QtCore.QTimer.singleShot(timeout_ms, self.hide)
 
 
 class ExpensesProxyModel(QtCore.QSortFilterProxyModel):
@@ -157,6 +188,31 @@ class AddExpenseDialog(QtWidgets.QDialog):
 	_last_date: str | None = None
 	_last_category: str | None = None
 
+	class _SuggestLineEdit(QtWidgets.QLineEdit):
+		def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+			if event.key() == QtCore.Qt.Key.Key_Tab:
+				completer = self.completer()
+				if completer is not None:
+					prefix = self.text().strip()
+					if prefix:
+						completer.setCompletionPrefix(prefix)
+						completion = completer.currentCompletion()
+						if completion and completion.casefold() != prefix.casefold():
+							self.setText(completion)
+							self.setCursorPosition(len(completion))
+							event.accept()
+							return
+			super().keyPressEvent(event)
+
+	@staticmethod
+	def _build_completer(items: list[str], parent: QtCore.QObject) -> QtWidgets.QCompleter:
+		model = QtCore.QStringListModel(items, parent)
+		completer = QtWidgets.QCompleter(model, parent)
+		completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
+		completer.setFilterMode(QtCore.Qt.MatchFlag.MatchStartsWith)
+		completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
+		return completer
+
 	def __init__(
 		self,
 		categories: list[str],
@@ -164,6 +220,8 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		*,
 		title: str | None = None,
 		initial: dict[str, str] | None = None,
+		name_suggestions: list[str] | None = None,
+		description_suggestions: list[str] | None = None,
 	):
 		super().__init__(parent)
 		self._is_edit = bool(initial)
@@ -175,9 +233,12 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		form = QtWidgets.QFormLayout()
 		layout.addLayout(form)
 
-		self.name_edit = QtWidgets.QLineEdit()
+		self.name_edit = AddExpenseDialog._SuggestLineEdit()
 		self.name_edit.setPlaceholderText(tr("ph.name"))
 		self.name_edit.setToolTip(tr("tt.fld.name"))
+		self.name_edit.setCompleter(
+			self._build_completer(name_suggestions or [], self.name_edit)
+		)
 		form.addRow(tr("fld.name"), self.name_edit)
 
 		self.date_edit = QtWidgets.QLineEdit()
@@ -199,9 +260,12 @@ class AddExpenseDialog(QtWidgets.QDialog):
 		self.price_edit.setToolTip(tr("tt.fld.price"))
 		form.addRow(tr("fld.price"), self.price_edit)
 
-		self.description_edit = QtWidgets.QLineEdit()
+		self.description_edit = AddExpenseDialog._SuggestLineEdit()
 		self.description_edit.setPlaceholderText(tr("ph.description"))
 		self.description_edit.setToolTip(tr("tt.fld.description"))
+		self.description_edit.setCompleter(
+			self._build_completer(description_suggestions or [], self.description_edit)
+		)
 		form.addRow(tr("fld.description"), self.description_edit)
 
 		buttons = QtWidgets.QDialogButtonBox(
@@ -681,8 +745,24 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		self._update_worker: UpdateDownloadWorker | None = None
 		self._update_progress_dialog: QtWidgets.QProgressDialog | None = None
 		self._pending_installer_path: str | None = None
+		self._toast = ToastLabel(self)
 
 		self.reload()
+
+	def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+		super().resizeEvent(event)
+		if self._toast.isVisible():
+			self._position_toast()
+
+	def _position_toast(self) -> None:
+		margin = 12
+		x = margin
+		y = max(margin, self.height() - self._toast.height() - margin)
+		self._toast.move(x, y)
+
+	def _show_toast(self, message: str, *, timeout_ms: int = 2400) -> None:
+		self._toast.show_toast(message, timeout_ms=timeout_ms)
+		self._position_toast()
 
 	def check_for_updates(self) -> None:
 		"""Vérifie s'il existe une version plus récente sur GitHub.
@@ -725,6 +805,7 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 		)
 
 		if not latest_tuple or latest_tuple <= current_tuple:
+			self._show_toast("Vous etes deja a jour.")
 			return
 
 		msg = QtWidgets.QMessageBox(self)
@@ -1022,6 +1103,23 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			return
 		self._update_pivot_totals()
 
+	def _ranked_suggestions(self, values: list[str], *, limit: int = 50) -> list[str]:
+		counter: Counter[str] = Counter()
+		for value in values:
+			text = (value or "").strip()
+			if text:
+				counter[text] += 1
+		if not counter:
+			return []
+		items = sorted(counter.items(), key=lambda item: (-item[1], item[0].casefold()))
+		return [text for text, _count in items[:limit]]
+
+	def _name_suggestions(self) -> list[str]:
+		return self._ranked_suggestions([exp.name for exp in self._expenses_cache])
+
+	def _description_suggestions(self) -> list[str]:
+		return self._ranked_suggestions([exp.description for exp in self._expenses_cache])
+
 	def _on_add_clicked(self) -> None:
 		if not self._categories:
 			QtWidgets.QMessageBox.warning(
@@ -1031,7 +1129,12 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			)
 			return
 
-		dlg = AddExpenseDialog(self._categories, self)
+		dlg = AddExpenseDialog(
+			self._categories,
+			self,
+			name_suggestions=self._name_suggestions(),
+			description_suggestions=self._description_suggestions(),
+		)
 		if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
 			return
 
@@ -1084,6 +1187,8 @@ class ExpensesWindow(QtWidgets.QMainWindow):
 			self,
 			title=tr("dlg.edit.title"),
 			initial=old,
+			name_suggestions=self._name_suggestions(),
+			description_suggestions=self._description_suggestions(),
 		)
 		if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
 			return
